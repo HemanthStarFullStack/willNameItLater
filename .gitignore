@@ -10,6 +10,16 @@ data/
 # Gradio generated files
 .gradio/
 
-# OS
-Thumbs.db
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# OS / editor
 .DS_Store
+Thumbs.db
+.vscode/
+.idea/
