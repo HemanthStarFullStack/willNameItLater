@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Local memory store (user data — not for the repo)
+data/
+
+# Gradio generated files
+.gradio/
+
+# OS
+Thumbs.db
+.DS_Store
