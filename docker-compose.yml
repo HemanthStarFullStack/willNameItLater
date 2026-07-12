@@ -1,0 +1,17 @@
+services:
+  app:
+    build: .
+    container_name: ondevice-ai
+    ports:
+      - "7860:7860"
+    environment:
+      # Ollama runs on the host; reach it across the container boundary.
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      - CHAT_MODEL=qwen3:1.7b
+      - EMBED_MODEL=nomic-embed-text
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Persist saved memories across container rebuilds.
+      - ./data:/app/data
+    restart: unless-stopped

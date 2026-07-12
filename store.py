@@ -54,20 +54,25 @@ class Store:
         return [x for x in self.facts
                 if category is None or x["category"] == category]
 
-    def search(self, query, category=None, k=8):
-        """Hybrid retrieval: fuse vector-cosine and BM25 rankings via RRF."""
+    def search(self, query, category=None, k=8, with_score=False):
+        """Hybrid retrieval: fuse vector-cosine and BM25 rankings via RRF.
+
+        With with_score=True, also returns the best raw cosine similarity — a
+        calibrated signal for "is any saved note actually relevant?" that the
+        chat layer uses to decide whether to invoke RAG at all.
+        """
         pool = self.facts_in(category) or self.facts
         if not pool:
-            return []
+            return ([], 0.0) if with_score else []
 
         q = np.array(llm.embed(query), dtype=float)
         qn = np.linalg.norm(q) or 1.0
+        cosines = {}
+        for x in pool:
+            a = np.array(x["embedding"], dtype=float)
+            cosines[x["id"]] = float(np.dot(q, a) / (qn * (np.linalg.norm(a) or 1.0)))
 
-        def cos(vec):
-            a = np.array(vec, dtype=float)
-            return float(np.dot(q, a) / (qn * (np.linalg.norm(a) or 1.0)))
-
-        vec_ranked = sorted(pool, key=lambda x: cos(x["embedding"]), reverse=True)
+        vec_ranked = sorted(pool, key=lambda x: cosines[x["id"]], reverse=True)
 
         bm = BM25Okapi([_tok(x["text"]) for x in pool])
         scores = bm.get_scores(_tok(query))
@@ -80,8 +85,11 @@ class Store:
         for rank, x in enumerate(bm_ranked):
             rr[x["id"]] = rr.get(x["id"], 0.0) + 1.0 / (60 + rank)
 
-        fused = sorted(pool, key=lambda x: rr.get(x["id"], 0.0), reverse=True)
-        return fused[:k]
+        fused = sorted(pool, key=lambda x: rr.get(x["id"], 0.0), reverse=True)[:k]
+        if with_score:
+            top = max((cosines[x["id"]] for x in fused), default=0.0)
+            return fused, top
+        return fused
 
 
 store = Store()

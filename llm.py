@@ -18,7 +18,8 @@ def chat(prompt, system=None, temperature=0.2):
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
-    resp = ollama.chat(model=CHAT_MODEL, messages=messages,
+    resp = ollama.chat(model=CHAT_MODEL, messages=messages, keep_alive="10m",
+                       think=False,  # qwen3 reasons for seconds otherwise
                        options={"temperature": temperature, "num_ctx": NUM_CTX})
     return _content(resp).strip()
 
@@ -29,8 +30,9 @@ def chat_json(prompt, system=None):
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
-    resp = ollama.chat(model=CHAT_MODEL, messages=messages,
-                       format="json", options={"temperature": 0, "num_ctx": NUM_CTX})
+    resp = ollama.chat(model=CHAT_MODEL, messages=messages, keep_alive="10m",
+                       think=False, format="json",
+                       options={"temperature": 0, "num_ctx": NUM_CTX})
     txt = _content(resp)
     try:
         return json.loads(txt)
@@ -43,7 +45,7 @@ def chat_json(prompt, system=None):
 
 
 def embed(text):
-    resp = ollama.embeddings(model=EMBED_MODEL, prompt=text)
+    resp = ollama.embeddings(model=EMBED_MODEL, prompt=text, keep_alive="10m")
     try:
         return list(resp.embedding)
     except Exception:
