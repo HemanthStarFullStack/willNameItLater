@@ -164,13 +164,72 @@ def _recent(history, n=4):
     return "\n".join(out)
 
 
+# Messages that can carry a durable personal fact look like "my X is Y" /
+# "I am/like/work..." and are not questions or commands. Only those pay the
+# extra extraction LLM call; everything else skips it.
+_FACT_HINT = re.compile(
+    r"\b(my|mine|i am|i'm|im|i have|i've|i work|i live|i like|i love|i hate|"
+    r"i prefer|i was|i use|i drive|i own|call me)\b", re.I)
+_NOT_FACT_START = re.compile(
+    r"^(what|who|whom|whose|when|where|why|how|is|are|am|was|were|do|does|did|"
+    r"can|could|will|would|should|shall|may|might|tell|show|give|list|search|"
+    r"find|explain|write|make|create|help|please)\b", re.I)
+
+
+def _looks_like_fact(message):
+    if "?" in message:
+        return False
+    if _NOT_FACT_START.match(message.strip()):
+        return False
+    return bool(_FACT_HINT.search(message))
+
+
+def _maybe_remember(message):
+    """If the user just told us a lasting personal fact, keep it.
+    Returns a footer label ("Work" / "Work · updated") or None."""
+    if not _looks_like_fact(message):
+        return None
+    out = llm.chat_json(
+        f'Message from the user: "{message}"\n\n'
+        "If this states a lasting personal fact about the user (name, health, "
+        "work, home, preferences, possessions, relationships, plans), rewrite "
+        'it as one short first-person note, e.g. "My name is Hemanth." '
+        "If it is a question, a request, or small talk, use null.\n"
+        'JSON: {"fact": "<note>"}  or  {"fact": null}',
+        system="You extract durable personal facts. Output only JSON.",
+    )
+    fact = out.get("fact")
+    fact = fact.strip() if isinstance(fact, str) else ""
+    if not fact:
+        return None
+
+    # ponytail: cosine >= 0.92 means the same fact restated or corrected ->
+    # update in place instead of piling up duplicates. Distinct facts about the
+    # same topic (allergy A vs allergy B) score lower and are added separately.
+    hits, score = store.search(fact, k=1, with_score=True)
+    if hits and score >= 0.92:
+        store.update(hits[0]["id"], fact)
+        return f'{hits[0]["category"]} · updated'
+    r = ingest(fact, "chat")
+    return r["category"] if r.get("ok") else None
+
+
 def chat(message, history=None):
-    """Return a reply string. Uses memory only when a note is truly relevant."""
+    """Return a reply string. Routes the question to the right expert memory
+    when a saved note is relevant, falls back to web/general chat otherwise,
+    and quietly saves any new personal fact the user states."""
     message = (message or "").strip()
     if not message:
         return "Ask me something."
 
-    hits, score = store.search(message, category=None, k=TOP_K, with_score=True)
+    expert = router.route_query(message)
+    hits, score = store.search(message, category=expert, k=TOP_K,
+                               with_score=True)
+    if expert and score < RAG_THRESHOLD:
+        # Routed to the wrong expert? Check all memories before giving up.
+        expert = None
+        hits, score = store.search(message, category=None, k=TOP_K,
+                                   with_score=True)
 
     if score >= RAG_THRESHOLD and hits:
         context = _fmt(hits)
@@ -184,13 +243,18 @@ def chat(message, history=None):
         )
         if not _verify(answer, context).get("grounded", True):
             answer += "\n\n_(couldn't fully verify this against your notes)_"
-        footer = f"🧠 from your memory · match {score:.2f}"
+        which = expert or hits[0]["category"]
+        footer = f"🧠 {which} memory · match {score:.2f}"
     else:
         answer, used_web = _chat_or_search(message, history)
         if used_web:
             footer = f"🌐 web search · no memory match ({score:.2f})"
         else:
             footer = f"💬 general reply · no memory match ({score:.2f})"
+
+    saved = _maybe_remember(message)
+    if saved:
+        footer += f" · 💾 saved to {saved}"
 
     return f"{answer}\n\n<sub>{footer}</sub>"
 

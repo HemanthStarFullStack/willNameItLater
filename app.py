@@ -35,14 +35,22 @@ def do_ingest(text):
     return f'✅ Saved to **{r["category"]}** (memory #{r["id"]})', ""
 
 
-def stats():
-    counts = store.categories()
-    if not counts:
+def list_facts():
+    """Everything the AI believes, grouped by expert — visible and deletable."""
+    if not store.facts:
         return "_No memories yet._"
-    total = sum(counts.values())
-    lines = [f"**{total} memories saved**", ""]
-    lines += [f"- {k} — {v}" for k, v in sorted(counts.items())]
+    lines = [f"**{len(store.facts)} memories** — this is everything the AI "
+             "knows about you. Delete anything that's wrong.", ""]
+    for cat in sorted({x["category"] for x in store.facts}):
+        lines.append(f"#### {cat}")
+        lines += [f"- `#{x['id']}` {x['text']}" for x in store.facts_in(cat)]
+        lines.append("")
     return "\n".join(lines)
+
+
+def do_delete(fid):
+    store.delete(int(fid or 0))
+    return list_facts()
 
 
 seed_if_empty()
@@ -67,8 +75,12 @@ with gr.Blocks(title="On-Device AI", fill_height=True) as demo:
         add_btn.click(do_ingest, t, [add_out, t])
 
     with gr.Tab("Memories"):
-        mem = gr.Markdown(stats())
-        gr.Button("Refresh").click(lambda: stats(), None, mem)
+        mem = gr.Markdown(list_facts())
+        with gr.Row():
+            del_id = gr.Number(label="Memory # to delete", precision=0)
+            del_btn = gr.Button("Delete")
+        gr.Button("Refresh").click(lambda: list_facts(), None, mem)
+        del_btn.click(do_delete, del_id, mem)
 
 if __name__ == "__main__":
     demo.launch(server_name="0.0.0.0", server_port=7860)

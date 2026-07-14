@@ -44,6 +44,25 @@ class Store:
             self._save()
             return fid
 
+    def update(self, fid, text):
+        with self._lock:
+            for x in self.facts:
+                if x["id"] == fid:
+                    x["text"] = text
+                    x["embedding"] = llm.embed(text)
+                    self._save()
+                    return True
+            return False
+
+    def delete(self, fid):
+        with self._lock:
+            n = len(self.facts)
+            self.facts = [x for x in self.facts if x["id"] != fid]
+            if len(self.facts) < n:
+                self._save()
+                return True
+            return False
+
     def categories(self):
         c = {}
         for x in self.facts:

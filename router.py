@@ -18,14 +18,33 @@ def route_ingest(text):
 
 
 def route_query(query):
-    """Pick which memory holds the answer; None means search everything."""
-    cats = ", ".join(CATEGORIES + ["ALL"])
-    out = llm.chat_json(
-        f"Which single category best holds the answer to this question? "
-        f"Options: [{cats}]. Use ALL if unsure.\n\n"
-        f'Question: "{query}"\n\n'
-        'Respond JSON: {"category": "<name>"}',
-        system="You route questions to a knowledge category. Output only JSON.",
-    )
-    cat = (out.get("category") or "ALL").strip()
-    return None if cat.upper() == "ALL" else cat
+    """Pick which expert memory should answer; None means search everything.
+
+    ponytail: centroid cosine instead of an LLM call — the parent compares the
+    query embedding against each expert's average embedding. Deterministic and
+    ~free; an LLM router costs seconds per turn and a 1.7B model misroutes.
+    Only routes when one expert clearly wins; unsure -> ALL (always safe,
+    because the caller falls back to a global search anyway).
+    """
+    import numpy as np
+    from store import store
+
+    cats = {}
+    for x in store.facts:
+        cats.setdefault(x["category"], []).append(x["embedding"])
+    if len(cats) < 2:
+        return None
+
+    q = np.array(llm.embed(query), dtype=float)
+    q /= (np.linalg.norm(q) or 1.0)
+    scored = []
+    for cat, embs in cats.items():
+        c = np.mean(np.array(embs, dtype=float), axis=0)
+        c /= (np.linalg.norm(c) or 1.0)
+        scored.append((float(np.dot(q, c)), cat))
+    scored.sort(reverse=True)
+
+    best, runner_up = scored[0], scored[1]
+    if best[0] >= 0.45 and best[0] - runner_up[0] >= 0.05:
+        return best[1]
+    return None

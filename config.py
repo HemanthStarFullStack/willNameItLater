@@ -19,8 +19,10 @@ TOP_K = 5      # notes actually fed to the LLM after fusion
 
 # If the best-matching note's cosine similarity is below this, the message isn't
 # a memory question -> answer as a normal chat instead of invoking RAG.
-# Calibrated: memory Qs score ~0.63-0.78, general Qs ~0.38-0.44.
-RAG_THRESHOLD = float(os.environ.get("RAG_THRESHOLD", "0.55"))
+# Calibrated: memory Qs score ~0.54-0.78 ("what is my name?" vs a short name
+# fact = 0.54, the observed floor), general Qs ~0.38-0.46 ("tell me a joke" =
+# 0.46, the observed ceiling). 0.52 splits the measured gap.
+RAG_THRESHOLD = float(os.environ.get("RAG_THRESHOLD", "0.52"))
 
 # Context window cap — keeps the KV cache small enough for this machine.
 NUM_CTX = int(os.environ.get("NUM_CTX", "4096"))
