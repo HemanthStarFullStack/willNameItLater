@@ -1,0 +1,25 @@
+# Cloud iOS build (no Mac needed). Free tier: 500 macOS minutes/month.
+# Produces an UNSIGNED ipa -> install on the iPad from Windows with Sideloadly
+# (signs at install time with a free Apple ID; app lasts 7 days, reinstall to renew).
+workflows:
+  ios-unsigned:
+    name: iOS unsigned IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 45
+    environment:
+      flutter: stable
+    scripts:
+      - name: Flutter packages
+        script: cd mobile && flutter pub get
+      - name: Build iOS (no codesign)
+        script: |
+          cd mobile
+          flutter build ios --release --no-codesign
+      - name: Package ipa
+        script: |
+          cd mobile/build/ios/iphoneos
+          mkdir Payload
+          cp -r Runner.app Payload/
+          zip -qr OnDeviceAI.ipa Payload
+    artifacts:
+      - mobile/build/ios/iphoneos/OnDeviceAI.ipa

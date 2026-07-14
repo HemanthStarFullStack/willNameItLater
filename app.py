@@ -25,7 +25,11 @@ def seed_if_empty():
 
 
 def respond(message, history):
-    return pipeline.chat(message, history)
+    try:
+        return pipeline.chat(message, history)
+    except ConnectionError:
+        return ("⚠️ I can't reach the local model (Ollama isn't running). "
+                "Start it and try again — nothing was saved.")
 
 
 def do_ingest(text):

@@ -74,6 +74,11 @@ reply = pipeline.chat("What's my wifi password?", [])
 check("chat: question not saved", len(store.facts) == n0 and "💾" not in reply)
 
 # --- the persistent-memory fix -------------------------------------------------
+# The real store may already hold the name fact; drop it (in memory only —
+# _save is stubbed) so add-vs-update is deterministic.
+for x in [x for x in store.facts if "hemanth" in x["text"].lower()]:
+    store.delete(x["id"])
+n0 = len(store.facts)
 reply = pipeline.chat("My name is Hemanth", [])
 check("chat: fact saved", len(store.facts) == n0 + 1, reply[-80:])
 check("chat: save footer", "💾" in reply)

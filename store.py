@@ -105,10 +105,13 @@ class Store:
             rr[x["id"]] = rr.get(x["id"], 0.0) + 1.0 / (60 + rank)
 
         fused = sorted(pool, key=lambda x: rr.get(x["id"], 0.0), reverse=True)[:k]
+        # Copies with the raw cosine attached, so callers can drop distractor
+        # notes without these extra keys leaking into the persisted facts.
+        out = [dict(x, _cos=cosines[x["id"]]) for x in fused]
         if with_score:
-            top = max((cosines[x["id"]] for x in fused), default=0.0)
-            return fused, top
-        return fused
+            top = max((h["_cos"] for h in out), default=0.0)
+            return out, top
+        return out
 
 
 store = Store()

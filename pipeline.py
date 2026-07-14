@@ -222,7 +222,9 @@ def chat(message, history=None):
     if not message:
         return "Ask me something."
 
+    steps = []
     expert = router.route_query(message)
+    steps.append(f"routed to <b>{expert or 'all'}</b> memories")
     hits, score = store.search(message, category=expert, k=TOP_K,
                                with_score=True)
     if expert and score < RAG_THRESHOLD:
@@ -230,22 +232,40 @@ def chat(message, history=None):
         expert = None
         hits, score = store.search(message, category=None, k=TOP_K,
                                    with_score=True)
+        steps.append(f"expert scored low → re-searched <b>all</b> ({score:.2f})")
 
     if score >= RAG_THRESHOLD and hits:
+        # ponytail: only near-top notes reach the model. A 1.7B answerer given
+        # loosely-related notes quotes the wrong one (asked passport, said the
+        # name). Measured: right note ~0.67-0.77, distractors ~0.35-0.45.
+        # Ceiling: multi-fact questions lose secondary notes; widen if needed.
+        hits = [h for h in hits if h.get("_cos", 1.0) >= score - 0.12]
+        steps.append(f"match {score:.2f} ≥ {RAG_THRESHOLD} → memory path, "
+                     f"kept {len(hits)} note(s) after dropping distractors")
         context = _fmt(hits)
         answer = llm.chat(
             f"NOTES about the user:\n{context}\n\n"
             f"QUESTION: {message}\n\n"
             "Answer directly and briefly using the NOTES. Use a note even if the "
-            "wording differs. Do not add anything not asked. Do not include "
-            "reference numbers like [1] or category tags.",
+            "wording differs. Never repeat or rephrase the question — state the "
+            "actual value or fact from the NOTES. Do not add anything not asked. "
+            "Do not include reference numbers like [1] or category tags. If the "
+            "NOTES do not actually contain the answer, reply exactly: \"I don't "
+            'have that in your data yet." — never substitute a different fact.',
             system="You answer strictly from the user's notes. Never invent facts.",
         )
-        if not _verify(answer, context).get("grounded", True):
+        verdict = _verify(answer, context)
+        steps.append(f"verify: {'✔ grounded' if verdict.get('grounded', True) else '✘ unverified'}"
+                     f" ({verdict.get('reason', '')})")
+        if not verdict.get("grounded", True):
             answer += "\n\n_(couldn't fully verify this against your notes)_"
         which = expert or hits[0]["category"]
         footer = f"🧠 {which} memory · match {score:.2f}"
     else:
+        if _needs_web(message):
+            steps.append(f"no memory match ({score:.2f}), live-info cue → web search")
+        else:
+            steps.append(f"no memory match ({score:.2f}), no web cue → general chat")
         answer, used_web = _chat_or_search(message, history)
         if used_web:
             footer = f"🌐 web search · no memory match ({score:.2f})"
@@ -255,8 +275,11 @@ def chat(message, history=None):
     saved = _maybe_remember(message)
     if saved:
         footer += f" · 💾 saved to {saved}"
+        steps.append(f"💾 new fact detected → saved to {saved}")
 
-    return f"{answer}\n\n<sub>{footer}</sub>"
+    trace = "<br>".join(f"{i+1}. {s}" for i, s in enumerate(steps))
+    return (f"{answer}\n\n<details><summary>🧭 thought process</summary>"
+            f"<sub>{trace}</sub></details><sub>{footer}</sub>")
 
 
 def _needs_web(message):
