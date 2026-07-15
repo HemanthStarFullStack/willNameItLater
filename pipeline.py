@@ -61,13 +61,21 @@ def _crag(query, hits):
 
 
 def _verify(answer, context):
-    """Groundedness gate. Answers here are extractive, so groundedness is mostly
-    "do the answer's words come from the notes?" — a fast, deterministic check.
-    We only spend an LLM call when the answer introduces terms not in the notes,
-    which is exactly where a hallucination would show up.
+    """Groundedness gate. Primary check = HHEM (a small NLI cross-encoder that
+    scores whether the answer is entailed by the notes — catches negation and
+    wrong values that lexical overlap can't see). If HHEM isn't installed,
+    fall back to lexical coverage + an LLM judge for the low-overlap cases.
     """
     if "don't have that in your data" in answer.lower():
         return {"grounded": True, "reason": "honest no-answer"}
+
+    try:
+        import verify
+        from config import HHEM_THRESHOLD
+        s = verify.score(context, answer)
+        return {"grounded": s >= HHEM_THRESHOLD, "reason": f"HHEM {s:.2f}"}
+    except Exception:
+        pass  # torch/transformers missing -> heuristic path below
 
     words = _content_words(answer)
     ctx = set(_content_words(context))
@@ -350,8 +358,9 @@ def _combine(message, parts):
     out = llm.chat(
         f"QUESTION: {message}\n\nFACTS:\n"
         + "\n".join(f"- {p}" for p in parts)
-        + "\n\nWrite one short, natural reply answering the question using "
-        "ONLY these facts. Do not add anything new.",
+        + "\n\nWrite one short, natural reply addressed to the user (say "
+        "\"your\", not \"my\") answering the question using ONLY these facts. "
+        "Do not add anything new.",
         system="You merge partial answers into one reply. Never add facts.",
     )
     words = _content_words(out)
@@ -407,10 +416,12 @@ def _answer_one(message, history, steps):
         answer = llm.chat(
             f"NOTES about the user:\n{context}\n\n"
             f"QUESTION: {message}\n\n"
-            "Answer directly and briefly using the NOTES. Use a note even if the "
-            "wording differs. Never repeat or rephrase the question — state the "
-            "actual value or fact from the NOTES. Do not add anything not asked. "
-            "Do not include reference numbers like [1] or category tags. If the "
+            "Answer in ONE short, natural sentence addressed to the user — "
+            "start with \"Your\" or \"You\" where it fits, never with \"My\". "
+            "State the actual value from the NOTES; never just repeat the "
+            "question, and never copy a note word-for-word as the whole reply. "
+            "Use a note even if its wording differs. Do not add anything not "
+            "asked; no reference numbers like [1] or category tags. If the "
             "NOTES do not actually contain the answer, reply exactly: \"I don't "
             'have that in your data yet." — never substitute a different fact.',
             system="You answer strictly from the user's notes. Never invent facts.",

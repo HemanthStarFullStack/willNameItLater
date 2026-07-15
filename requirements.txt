@@ -3,3 +3,8 @@ ollama>=0.6
 rank_bm25>=0.2
 numpy>=1.26
 ddgs>=6.0
+# HHEM groundedness model (torch itself is installed CPU-only in the Dockerfile)
+transformers>=4.44,<5
+# document ingestion
+pypdfium2>=4
+pillow>=10

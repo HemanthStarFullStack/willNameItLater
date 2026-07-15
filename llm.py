@@ -3,7 +3,7 @@ import json
 import re
 import ollama
 
-from config import CHAT_MODEL, EMBED_MODEL, NUM_CTX
+from config import CHAT_MODEL, EMBED_MODEL, VISION_MODEL, NUM_CTX
 
 
 def _content(resp):
@@ -42,6 +42,16 @@ def chat_json(prompt, system=None):
             return json.loads(m.group(0)) if m else {}
         except Exception:
             return {}
+
+
+def see(prompt, image_bytes):
+    """Read one image with the local vision model. keep_alive is short so the
+    4GB GPU goes back to the chat model right after ingestion."""
+    resp = ollama.chat(model=VISION_MODEL, keep_alive="2m",
+                       messages=[{"role": "user", "content": prompt,
+                                  "images": [image_bytes]}],
+                       options={"temperature": 0, "num_ctx": NUM_CTX})
+    return _content(resp).strip()
 
 
 def embed(text):

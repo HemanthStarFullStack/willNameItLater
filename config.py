@@ -4,12 +4,17 @@ import os
 BASE = os.path.dirname(__file__)
 DATA_DIR = os.path.join(BASE, "data")
 DATA_FILE = os.path.join(DATA_DIR, "memories.json")
+CHAT_FILE = os.path.join(DATA_DIR, "chats.json")
 
 # Local Ollama models (already pulled on this machine).
 # 1.5B chat model: fits a 4GB GPU fully (no VRAM swapping) -> much faster,
 # same pipeline. Override with CHAT_MODEL=llama3.2:3b for higher quality.
 CHAT_MODEL = os.environ.get("CHAT_MODEL", "qwen3:1.7b")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
+# Reads document/image pages during ingestion (the ColPali slot). Loaded by
+# Ollama on demand and released after (keep_alive short) so it doesn't fight
+# the chat model for the 4GB GPU.
+VISION_MODEL = os.environ.get("VISION_MODEL", "qwen3-vl:2b")
 
 # Seeded "life bucket" expert memories.
 CATEGORIES = ["Health", "Money", "Work", "Learning", "Home", "Personal", "Travel"]
@@ -26,3 +31,7 @@ RAG_THRESHOLD = float(os.environ.get("RAG_THRESHOLD", "0.52"))
 
 # Context window cap — keeps the KV cache small enough for this machine.
 NUM_CTX = int(os.environ.get("NUM_CTX", "4096"))
+
+# HHEM groundedness score below this = the answer isn't supported by the notes.
+# 0.5 is Vectara's published operating point for HHEM-2.1-Open.
+HHEM_THRESHOLD = float(os.environ.get("HHEM_THRESHOLD", "0.5"))
