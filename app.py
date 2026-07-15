@@ -141,7 +141,8 @@ with gr.Blocks(title="On-Device AI", fill_height=True) as demo:
         up_btn.click(do_upload, up, up_out)
 
     with gr.Tab("Memories"):
-        mem = gr.Markdown(list_facts())
+        # callable -> re-read per page load, not frozen at app start
+        mem = gr.Markdown(list_facts)
         with gr.Row():
             del_id = gr.Number(label="Memory # to delete", precision=0)
             del_btn = gr.Button("Delete")

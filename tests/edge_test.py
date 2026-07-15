@@ -41,6 +41,15 @@ check("fact-hint: greeting blocked", not pipeline._looks_like_fact("hi"))
 check("fact-hint: no-question-mark question blocked",
       not pipeline._looks_like_fact("what's my wifi password"))
 
+# --- lookup vs conversation (decides strict-extractive vs natural reply) -----
+check("lookup: value question", pipeline._is_lookup("what's my blood group"))
+check("lookup: 'am i' question", pipeline._is_lookup("am I allergic to anything"))
+check("lookup: advice question is not a lookup",
+      not pipeline._is_lookup("what should I learn next"))
+check("lookup: encouragement is not a lookup",
+      not pipeline._is_lookup("what do you think about my career"))
+check("lookup: small talk is not a lookup", not pipeline._is_lookup("tell me a joke"))
+
 # --- store update/delete roundtrip -------------------------------------------
 n0 = len(store.facts)
 fid = store.add("Temporary test fact about kayaking.", "Personal")

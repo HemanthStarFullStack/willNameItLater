@@ -7,7 +7,7 @@ import llm
 import router
 import web
 from store import store
-from config import SEARCH_K, TOP_K, RAG_THRESHOLD
+from config import SEARCH_K, TOP_K, RAG_THRESHOLD, CHAT_CONTEXT_FLOOR
 
 # Obvious "needs the live web" signals. The 1.5B model can't reliably sense its
 # own knowledge cutoff (it will confidently guess "who won the 2026 ..."), so we
@@ -389,8 +389,28 @@ def _entity_filter(query, hits):
     return out or hits
 
 
+# Asking for a stored VALUE ("what's my passport number") vs asking for
+# conversation ("what should I learn next"). Only the first gets the strict
+# extractive answer + HHEM gate; everything else talks like a person and uses
+# the notes as background. Advice words win: "what should I do" reads as a
+# question but wants an opinion, not a lookup.
+_LOOKUP = re.compile(
+    r"^(what|whats|which|when|whens|where|wheres|who|whos|whose|"
+    r"how (much|many|old|long)|am i|do i|does my|is my|are my|"
+    r"tell me my|list my|show my)\b", re.I)
+_ADVICE = re.compile(
+    r"\b(should|could|would|recommend|suggest|advice|advise|think|opinion|"
+    r"idea|ideas|tips|help me|motivate|encourage|feel|feeling|worried|"
+    r"nervous|excited|stressed|plan|prepare|next|better|improve)\b", re.I)
+
+
+def _is_lookup(message):
+    return bool(_LOOKUP.match(message.strip())) and not _ADVICE.search(message)
+
+
 def _answer_one(message, history, steps):
     """Answer a single question; returns (answer, footer)."""
+    lookup = _is_lookup(message)
     expert = router.route_query(message)
     steps.append(f"routed to <b>{expert or 'all'}</b> memories")
     hits, score = store.search(message, category=expert, k=TOP_K,
@@ -402,7 +422,7 @@ def _answer_one(message, history, steps):
                                    with_score=True)
         steps.append(f"expert scored low → re-searched <b>all</b> ({score:.2f})")
 
-    if score >= RAG_THRESHOLD and hits:
+    if lookup and score >= RAG_THRESHOLD and hits:
         # ponytail: only near-top notes reach the model. A 1.7B answerer given
         # loosely-related notes quotes the wrong one (asked passport, said the
         # name). Measured: right note ~0.67-0.77, distractors ~0.35-0.45.
@@ -435,13 +455,21 @@ def _answer_one(message, history, steps):
         return answer, f"🧠 {which} memory · match {score:.2f}"
 
     if _needs_web(message):
-        steps.append(f"no memory match ({score:.2f}), live-info cue → web search")
-    else:
-        steps.append(f"no memory match ({score:.2f}), no web cue → general chat")
-    answer, used_web = _chat_or_search(message, history)
-    if used_web:
+        steps.append(f"live-info cue → web search")
+        answer, _ = _chat_or_search(message, history, [])
         return answer, f"🌐 web search · no memory match ({score:.2f})"
-    return answer, f"💬 general reply · no memory match ({score:.2f})"
+
+    # Conversational reply. The notes ride along as background so it can talk
+    # about the user's actual life instead of forgetting them the moment the
+    # question isn't a lookup. ponytail: no HHEM here on purpose — encouragement
+    # isn't extractive, and the gate would flag every friendly sentence.
+    notes = [h for h in hits if h.get("_cos", 0) >= CHAT_CONTEXT_FLOOR]
+    why = "not a value lookup" if not lookup else f"no memory match ({score:.2f})"
+    steps.append(f"{why} → conversational reply"
+                 + (f", {len(notes)} note(s) as background" if notes else ""))
+    answer, _ = _chat_or_search(message, history, notes)
+    tag = f" · {len(notes)} note(s) as context" if notes else ""
+    return answer, f"💬 general reply{tag}"
 
 
 def chat(message, history=None):
@@ -493,14 +521,25 @@ def _needs_web(message):
     return bool(_WEB_HINTS.search(message))
 
 
-def _chat_or_search(message, history):
+def _chat_or_search(message, history, notes=()):
     """Normal chat, escalating to a web search when the question needs live info.
-    Returns (answer, used_web)."""
+    `notes` is optional background about the user — relevant memories the reply
+    may draw on, not facts it must recite. Returns (answer, used_web)."""
     if not _needs_web(message):
         convo = _recent(history)
-        prompt = f"{convo}\nUser: {message}\nAssistant:" if convo else message
-        answer = llm.chat(prompt, system="You are a helpful, concise personal "
-                          "assistant. Answer in a sentence or two.")
+        known = (f"What you already know about them (use only what fits, "
+                 f"ignore the rest):\n{_fmt(notes)}\n\n" if notes else "")
+        prompt = f"{known}{convo}\nUser: {message}\nAssistant:"
+        answer = llm.chat(
+            prompt,
+            system="You are the user's personal assistant and you know them "
+                   "well. Talk like a warm, straight-talking friend — natural "
+                   "sentences, no lists, no reference numbers. Draw on what you "
+                   "know about them when it genuinely helps: to encourage them, "
+                   "give advice that fits their life, or connect things. Never "
+                   "recite their details back at them, and never mention facts "
+                   "that aren't relevant. Two to four sentences.",
+            temperature=0.7)  # conversation, not extraction
         return answer, False
 
     results = web.search(message, k=4)

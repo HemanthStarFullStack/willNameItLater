@@ -29,6 +29,12 @@ TOP_K = 5      # notes actually fed to the LLM after fusion
 # 0.46, the observed ceiling). 0.52 splits the measured gap.
 RAG_THRESHOLD = float(os.environ.get("RAG_THRESHOLD", "0.52"))
 
+# Notes below RAG_THRESHOLD aren't an answer, but they're still useful colour
+# for a conversational reply ("you're learning Flutter" when asked about side
+# projects). Anything scoring above this floor is handed to the chat path as
+# background — well under the lookup gate on purpose.
+CHAT_CONTEXT_FLOOR = float(os.environ.get("CHAT_CONTEXT_FLOOR", "0.35"))
+
 # Context window cap — keeps the KV cache small enough for this machine.
 NUM_CTX = int(os.environ.get("NUM_CTX", "4096"))
 
