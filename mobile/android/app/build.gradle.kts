@@ -35,6 +35,16 @@ android {
             isShrinkResources = false
         }
     }
+
+    // Compress the native .so libs inside the APK so it fits under the 30 MB
+    // chat/upload limit (~35 MB -> ~15 MB). Android extracts them at install
+    // time — a bit more storage, no runtime downside. Still a normal,
+    // directly-installable APK (no unzip step).
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
 }
 
 kotlin {
