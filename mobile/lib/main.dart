@@ -6,45 +6,76 @@ import 'package:lib_llama_cpp/lib_llama_cpp.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:system_info_plus/system_info_plus.dart';
 
-// Open GGUF model ladder (Qwen2.5) — direct HuggingFace downloads, no account
-// and no token. `minRamGB` is the total device RAM below which we won't
-// auto-pick a model: the weights + KV cache + the app all have to fit in memory
-// or the OS kills us.
-const _models = [
-  (
-    name: 'Qwen2.5 0.5B',
-    size: '~400 MB',
-    minRamGB: 0.0,
-    file: 'qwen2.5-0.5b-instruct-q4_k_m.gguf',
-    url: 'https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/'
-        'qwen2.5-0.5b-instruct-q4_k_m.gguf',
-  ),
-  (
-    name: 'Qwen2.5 1.5B',
-    size: '~1.0 GB',
-    minRamGB: 3.0,
-    file: 'qwen2.5-1.5b-instruct-q4_k_m.gguf',
-    url: 'https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/'
-        'qwen2.5-1.5b-instruct-q4_k_m.gguf',
-  ),
-  (
-    name: 'Qwen2.5 3B',
-    size: '~2.0 GB',
-    minRamGB: 6.0,
-    file: 'qwen2.5-3b-instruct-q4_k_m.gguf',
-    url: 'https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/'
-        'qwen2.5-3b-instruct-q4_k_m.gguf',
-  ),
+/// One on-device model. Everything the picker needs to score it against a
+/// phone. `minRamGB` = the device RAM floor to run it at all; `quality` is a
+/// hand-curated 0–100 benchmark proxy (small-model instruct reputation), used
+/// only to *rank* models that fit — like the desktop "which LLM fits" tools,
+/// scaled down to what actually runs on a phone. All URLs are open GGUF (Qwen
+/// official or bartowski mirrors) — no HuggingFace token.
+class Model {
+  final String name, family, file, url;
+  final double params, sizeGB, minRamGB;
+  final int quality, year;
+  const Model(this.name, this.family, this.params, this.sizeGB, this.minRamGB,
+      this.quality, this.year, this.file, this.url);
+}
+
+const _catalog = <Model>[
+  Model('SmolLM2 360M', 'SmolLM2', 0.36, 0.3, 1.5, 34, 2024,
+      'SmolLM2-360M-Instruct-Q4_K_M.gguf',
+      'https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf'),
+  Model('Qwen2.5 0.5B', 'Qwen2.5', 0.5, 0.4, 2.0, 44, 2024,
+      'qwen2.5-0.5b-instruct-q4_k_m.gguf',
+      'https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf'),
+  Model('Llama 3.2 1B', 'Llama', 1.0, 0.8, 3.0, 52, 2024,
+      'Llama-3.2-1B-Instruct-Q4_K_M.gguf',
+      'https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf'),
+  Model('Qwen2.5 1.5B', 'Qwen2.5', 1.5, 1.0, 3.0, 62, 2024,
+      'qwen2.5-1.5b-instruct-q4_k_m.gguf',
+      'https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf'),
+  Model('SmolLM2 1.7B', 'SmolLM2', 1.7, 1.1, 3.0, 56, 2024,
+      'SmolLM2-1.7B-Instruct-Q4_K_M.gguf',
+      'https://huggingface.co/bartowski/SmolLM2-1.7B-Instruct-GGUF/resolve/main/SmolLM2-1.7B-Instruct-Q4_K_M.gguf'),
+  Model('Gemma 2 2B', 'Gemma', 2.6, 1.7, 4.0, 67, 2024,
+      'gemma-2-2b-it-Q4_K_M.gguf',
+      'https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf'),
+  Model('Llama 3.2 3B', 'Llama', 3.0, 2.0, 6.0, 72, 2024,
+      'Llama-3.2-3B-Instruct-Q4_K_M.gguf',
+      'https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf'),
+  Model('Qwen2.5 3B', 'Qwen2.5', 3.0, 2.0, 6.0, 74, 2024,
+      'qwen2.5-3b-instruct-q4_k_m.gguf',
+      'https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf'),
+  Model('Phi-3.5 mini', 'Phi', 3.8, 2.3, 6.0, 78, 2024,
+      'Phi-3.5-mini-instruct-Q4_K_M.gguf',
+      'https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf'),
 ];
 
-// Let the device's specs choose: the biggest model whose RAM floor it clears.
-int _pickModel(double ramGB) {
-  var best = 0;
-  for (var i = 0; i < _models.length; i++) {
-    if (ramGB >= _models[i].minRamGB) best = i;
-  }
-  return best;
+// Fit against a device's RAM: 2 = comfortable, 1 = tight, 0 = won't run.
+int _fit(Model m, double ramGB) =>
+    ramGB >= m.minRamGB * 1.4 ? 2 : (ramGB >= m.minRamGB ? 1 : 0);
+
+// Whole catalog ranked for this device: models that fit first (best quality on
+// top), then the ones that don't — kept visible so you can see what a bigger
+// phone would unlock, exactly like the desktop hardware-scan tools.
+List<Model> _ranked(double ramGB) {
+  final list = [..._catalog];
+  list.sort((a, b) {
+    final fa = _fit(a, ramGB) > 0 ? 1 : 0;
+    final fb = _fit(b, ramGB) > 0 ? 1 : 0;
+    if (fa != fb) return fb - fa;
+    return b.quality.compareTo(a.quality);
+  });
+  return list;
 }
+
+// The single best model this device can run (highest quality that fits).
+Model _best(double ramGB) => _ranked(ramGB).firstWhere(
+      (m) => _fit(m, ramGB) > 0,
+      orElse: () => _catalog.first,
+    );
+
+String _tier(int q) =>
+    q >= 75 ? 'excellent' : (q >= 62 ? 'strong' : (q >= 48 ? 'good' : 'basic'));
 
 void main() => runApp(const App());
 
@@ -69,8 +100,9 @@ class Home extends StatefulWidget {
 class _HomeState extends State<Home> {
   LlamaOpenAIClient? _client;
   final _messages = <({String text, bool isUser})>[];
+  final _turns = <LlamaResponseInputItem>[]; // role-tagged chat history
   final _input = TextEditingController();
-  int _modelIx = 0;
+  Model? _selected;
   double? _ramGB;
   double? _progress;
   String? _status;
@@ -83,16 +115,15 @@ class _HomeState extends State<Home> {
   }
 
   Future<void> _restore() async {
-    // Read total RAM and let the phone's specs choose the model automatically.
+    // Scan the hardware (RAM) and auto-select the best model that fits.
     final mb = await SystemInfoPlus.physicalMemory ?? 0;
     final ramGB = mb / 1024.0;
-    final ix = _pickModel(ramGB);
+    final best = _best(ramGB);
     setState(() {
       _ramGB = ramGB > 0 ? ramGB : null;
-      _modelIx = ix;
+      _selected = best;
     });
-    // If that model is already on disk from a previous run, load it now.
-    final path = await _modelPath(_models[ix].file);
+    final path = await _modelPath(best.file);
     if (File(path).existsSync()) _load(path);
   }
 
@@ -111,7 +142,8 @@ class _HomeState extends State<Home> {
   }
 
   Future<void> _download() async {
-    final m = _models[_modelIx];
+    final m = _selected;
+    if (m == null) return;
     final path = await _modelPath(m.file);
     if (File(path).existsSync()) {
       _load(path);
@@ -119,11 +151,11 @@ class _HomeState extends State<Home> {
     }
     setState(() {
       _progress = 0;
-      _status = 'Downloading ${m.name} (${m.size})… first time only.';
+      _status = 'Downloading ${m.name} (${m.sizeGB.toStringAsFixed(1)} GB)… '
+          'first time only.';
     });
     try {
-      // Download to a .part file, then rename — so an interrupted download is
-      // never mistaken for a complete model on the next launch.
+      // .part then rename, so an interrupted download isn't taken for complete.
       await Dio().download(m.url, '$path.part',
           onReceiveProgress: (rec, total) {
         if (total > 0) setState(() => _progress = rec / total);
@@ -142,23 +174,37 @@ class _HomeState extends State<Home> {
     final client = _client;
     if (text.isEmpty || client == null || _generating) return;
     _input.clear();
+    // Role-tagged history. The `name` field is what forces lib_llama_cpp down
+    // its chat-template path (generateMessages) instead of raw completion —
+    // without it the model gets an un-templated prompt and rambles into
+    // nonsense. Standard chat templates ignore `name`, so it's harmless.
+    _turns.add(LlamaResponseInputItem(role: 'user', content: text, name: 'u'));
     setState(() {
       _messages.add((text: text, isUser: true));
       _messages.add((text: '', isUser: false));
       _generating = true;
     });
+    final reply = StringBuffer();
     try {
       await for (final event in client.responses.stream(
         model: 'local',
-        input: text,
+        input: List<LlamaResponseInputItem>.from(_turns),
+        instructions:
+            'You are a helpful assistant. Answer clearly and concisely.',
+        temperature: 0.7, // greedy (no temp) loops/repeats on-device
+        topP: 0.9,
+        maxOutputTokens: 512,
       )) {
         if (event case LlamaResponseOutputTextDelta(:final delta)) {
+          reply.write(delta);
           setState(() {
             final last = _messages.removeLast();
             _messages.add((text: last.text + delta, isUser: false));
           });
         }
       }
+      _turns.add(LlamaResponseInputItem(
+          role: 'assistant', content: reply.toString(), name: 'a'));
     } catch (e) {
       setState(() {
         _messages.removeLast();
@@ -176,45 +222,82 @@ class _HomeState extends State<Home> {
       );
 
   Widget _setup() {
+    final ram = _ramGB;
+    if (ram == null) {
+      return const Center(child: Text('Scanning your device…'));
+    }
+    final ranked = _ranked(ram);
+    final fitCount = _catalog.where((m) => _fit(m, ram) > 0).length;
+    final best = _best(ram);
     return Padding(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            _ramGB == null
-                ? 'Reading your device to choose a model…'
-                : 'Your device has ${_ramGB!.toStringAsFixed(1)} GB RAM — '
-                    'auto-selected ${_models[_modelIx].name}. Everything runs on '
-                    'the device; nothing you type ever leaves it, and no account '
-                    'or token is needed.',
-          ),
-          const SizedBox(height: 16),
-          for (var i = 0; i < _models.length; i++)
-            RadioListTile<int>(
-              value: i,
-              groupValue: _modelIx,
-              title: Text('${_models[i].name}  (${_models[i].size})'),
-              onChanged: _progress != null
-                  ? null
-                  : (v) => setState(() => _modelIx = v!),
+          Text('Your device: ${ram.toStringAsFixed(1)} GB RAM — '
+              '$fitCount of ${_catalog.length} models fit, best one '
+              'auto-selected. Everything runs on-device; no account or token.'),
+          const SizedBox(height: 8),
+          Expanded(
+            child: ListView(
+              children: [
+                for (final m in ranked) _modelTile(m, ram, best),
+              ],
             ),
-          const SizedBox(height: 16),
+          ),
+          const SizedBox(height: 8),
           if (_progress != null) ...[
             LinearProgressIndicator(value: _progress),
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
             Text('${((_progress ?? 0) * 100).toStringAsFixed(0)}%'),
           ] else
             FilledButton(
-              onPressed: _download,
-              child: const Text('Download & start'),
+              onPressed: _selected == null ? null : _download,
+              child: Text(_selected == null
+                  ? 'No model fits this device'
+                  : 'Download & start  ·  ${_selected!.name}'),
             ),
           if (_status != null) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             Text(_status!, style: const TextStyle(color: Colors.orange)),
           ],
         ],
       ),
+    );
+  }
+
+  Widget _modelTile(Model m, double ram, Model best) {
+    final fit = _fit(m, ram);
+    final badge = fit == 2 ? '🟢' : (fit == 1 ? '🟡' : '🔴');
+    if (fit == 0) {
+      return ListTile(
+        enabled: false,
+        leading: Text(badge, style: const TextStyle(fontSize: 18)),
+        title: Text('${m.name}  ·  ${m.params}B'),
+        subtitle: Text('needs ${m.minRamGB.toStringAsFixed(0)}+ GB RAM'),
+      );
+    }
+    final rec = identical(m, best);
+    return RadioListTile<String>(
+      value: m.file,
+      groupValue: _selected?.file,
+      onChanged: _progress != null
+          ? null
+          : (_) => setState(() => _selected = m),
+      secondary: Text(badge, style: const TextStyle(fontSize: 18)),
+      title: Row(
+        children: [
+          Flexible(child: Text(m.name)),
+          if (rec)
+            const Padding(
+              padding: EdgeInsets.only(left: 8),
+              child: Text('★ best for you',
+                  style: TextStyle(fontSize: 12, color: Colors.indigo)),
+            ),
+        ],
+      ),
+      subtitle: Text('${m.params}B · ${m.sizeGB.toStringAsFixed(1)} GB · '
+          '${_tier(m.quality)} · ${m.family}'),
     );
   }
 
