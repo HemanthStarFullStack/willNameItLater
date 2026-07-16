@@ -10,6 +10,9 @@ services:
       - CHAT_MODEL=qwen3:1.7b
       - EMBED_MODEL=nomic-embed-text
       - VISION_MODEL=qwen3-vl:2b
+      # HHEM is cached in ./data/hf; don't re-check HuggingFace online each boot
+      # (offline retries hung startup for minutes). Delete the cache to re-fetch.
+      - HF_HUB_OFFLINE=1
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

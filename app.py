@@ -46,14 +46,38 @@ def _save_chats(history):
         json.dump(history[-200:], f, ensure_ascii=False)
 
 
+def _text_history(history):
+    # pipeline.chat wants string turns; drop any file bubbles Gradio injected.
+    return [m for m in (history or [])
+            if isinstance(m, dict) and isinstance(m.get("content"), str)]
+
+
 def respond(message, history):
-    try:
-        reply = pipeline.chat(message, history)
-    except ConnectionError:
-        return ("⚠️ I can't reach the local model (Ollama isn't running). "
-                "Start it and try again — nothing was saved.")
+    # multimodal=True -> message is {"text": str, "files": [paths]}.
+    text = (message.get("text") or "").strip()
+    files = message.get("files") or []
+
+    parts, shown = [], text
+    for path in files:
+        name = os.path.basename(path)
+        shown = f"{shown}  📎 {name}".strip()
+        try:
+            r = docs.ingest_file(path)
+        except ConnectionError:
+            parts.append("⚠️ Can't reach the local model (Ollama isn't running).")
+            continue
+        parts.append(f"❌ {name}: {r['msg']}" if not r["ok"] else
+                     f"📎 **{name}** → read {r['pages']} page(s), saved "
+                     f"{r['chunks']} chunk(s) to **{r['category']}**. Ask me about it.")
+    if text:
+        try:
+            parts.append(pipeline.chat(text, _text_history(history)))
+        except ConnectionError:
+            parts.append("⚠️ I can't reach the local model (Ollama isn't running).")
+
+    reply = "\n\n".join(parts) if parts else "Send a message or attach a PDF/photo."
     _save_chats((history or []) + [
-        {"role": "user", "content": message},
+        {"role": "user", "content": shown or "📎 (file)"},
         {"role": "assistant", "content": reply}])
     return reply
 
@@ -68,19 +92,6 @@ def do_ingest(text):
     if not r["ok"]:
         return r["msg"], text
     return f'✅ Saved to **{r["category"]}** (memory #{r["id"]})', ""
-
-
-def do_upload(path):
-    if not path:
-        return "Pick a file first."
-    try:
-        r = docs.ingest_file(path)
-    except ConnectionError:
-        return "⚠️ Can't reach the local model (Ollama isn't running)."
-    if not r["ok"]:
-        return f'❌ {r["msg"]}'
-    return (f'✅ Read **{r["pages"]} page(s)** → saved **{r["chunks"]} '
-            f'chunk(s)** to **{r["category"]}**. Ask about it in Chat.')
 
 
 def list_facts():
@@ -114,13 +125,18 @@ with gr.Blocks(title="On-Device AI", fill_height=True) as demo:
         gr.ChatInterface(
             fn=respond,
             type="messages",
+            multimodal=True,  # the input box takes a PDF/photo attachment too
+            textbox=gr.MultimodalTextbox(
+                file_types=[".pdf", ".png", ".jpg", ".jpeg", ".webp"],
+                placeholder="Ask me anything — or attach a PDF/photo to remember it."),
             # callable -> re-read on every page load, so a refresh shows the
             # latest saved history, not the history as of app start
             chatbot=gr.Chatbot(value=load_chats, type="messages",
                                label="Chat", height=450),
-            examples=["What's my blood group?", "What's my wifi password?",
-                      "Am I allergic to anything?", "Tell me a joke",
-                      "What's the capital of France?"],
+            examples=[{"text": "What's my blood group?"},
+                      {"text": "What's my wifi password?"},
+                      {"text": "Am I allergic to anything?"},
+                      {"text": "Tell me a joke"}],
             cache_examples=False,
         )
 
@@ -130,15 +146,6 @@ with gr.Blocks(title="On-Device AI", fill_height=True) as demo:
         add_btn = gr.Button("Save", variant="primary")
         add_out = gr.Markdown()
         add_btn.click(do_ingest, t, [add_out, t])
-
-    with gr.Tab("Documents"):
-        gr.Markdown("Upload a PDF or photo — it gets read locally and filed "
-                    "into your expert memories. Nothing leaves this machine.")
-        up = gr.File(label="PDF / image", type="filepath",
-                     file_types=[".pdf", ".png", ".jpg", ".jpeg", ".webp"])
-        up_btn = gr.Button("Read & save", variant="primary")
-        up_out = gr.Markdown()
-        up_btn.click(do_upload, up, up_out)
 
     with gr.Tab("Memories"):
         # callable -> re-read per page load, not frozen at app start
