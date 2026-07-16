@@ -9,8 +9,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  flutter_gemma: ^1.2.3
-  flutter_gemma_mediapipe: ^1.0.4
+  # llama.cpp (GGUF) on-device inference — open models, no HuggingFace token.
+  lib_llama_cpp: ^0.7.3
+  dio: ^5.7.0                # model download with progress
+  path_provider: ^2.1.5     # where to store the downloaded .gguf
   shared_preferences: ^2.5.5
   system_info_plus: ^0.0.6
 

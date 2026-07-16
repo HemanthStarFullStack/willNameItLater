@@ -19,7 +19,7 @@ android {
         applicationId = "com.example.ondevice_ai"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        minSdk = 28 // lib_llama_cpp_android requires 28 (Android 9+)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
