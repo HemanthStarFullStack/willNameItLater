@@ -63,9 +63,34 @@ def _pdf_texts(path):
         pdf.close()
 
 
+def _route_chunk(text):
+    """Route one chunk to its own expert bucket. Cheap centroid route first
+    (route_query is ~free); an LLM classify only when that's unsure — so a
+    multi-topic doc (a resume's work / education / skills / contact) lands
+    across the right memories instead of all dumped into one bucket."""
+    return router.route_query(text) or \
+        router.snap_to_existing(text, router.route_ingest(text))
+
+
+def _store_chunks(chunks, name):
+    """Route each chunk to its bucket and save it; skip exact re-uploads of the
+    same file so re-ingesting a document doesn't duplicate every memory.
+    Returns (sorted distinct categories touched, count saved)."""
+    seen = {x["text"] for x in store.facts if x.get("source") == name}
+    cats, saved = set(), 0
+    for c in chunks:
+        if c in seen:
+            continue
+        cat = _route_chunk(c)
+        store.add(c, cat, source=name)
+        cats.add(cat)
+        saved += 1
+    return sorted(cats), saved
+
+
 def ingest_file(path):
     """Ingest one PDF or image into memory. Returns a result dict:
-    {ok, category, chunks, pages, msg}."""
+    {ok, categories, chunks, pages, msg}."""
     name = re.sub(r".*[\\/]", "", path)
     low = name.lower()
 
@@ -84,13 +109,9 @@ def ingest_file(path):
     if not chunks:
         return {"ok": False, "msg": "Couldn't read any text from the file."}
 
-    # One document = one domain: classify once on a sample, not per chunk
-    # (per-chunk LLM classify calls are slow and fragment the buckets).
-    category = router.route_ingest(chunks[0][:400])
-    if category not in store.categories():
-        category = router.snap_to_existing(chunks[0], category)
-
-    for c in chunks:
-        store.add(c, category, source=name)
-    return {"ok": True, "category": category, "chunks": len(chunks),
+    cats, saved = _store_chunks(chunks, name)
+    if saved == 0:
+        return {"ok": True, "categories": [], "chunks": 0, "pages": n_pages,
+                "msg": "Already in your memory — nothing new to add."}
+    return {"ok": True, "categories": cats, "chunks": saved,
             "pages": n_pages, "msg": ""}

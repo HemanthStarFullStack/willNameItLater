@@ -66,9 +66,14 @@ def respond(message, history):
         except ConnectionError:
             parts.append("⚠️ Can't reach the local model (Ollama isn't running).")
             continue
-        parts.append(f"❌ {name}: {r['msg']}" if not r["ok"] else
-                     f"📎 **{name}** → read {r['pages']} page(s), saved "
-                     f"{r['chunks']} chunk(s) to **{r['category']}**. Ask me about it.")
+        if not r["ok"]:
+            parts.append(f"❌ {name}: {r['msg']}")
+        elif r["chunks"] == 0:
+            parts.append(f"📎 {name}: {r['msg']}")
+        else:
+            where = ", ".join(f"**{c}**" for c in r["categories"])
+            parts.append(f"📎 **{name}** → read {r['pages']} page(s), saved "
+                         f"{r['chunks']} chunk(s) to {where}. Ask me about it.")
     if text:
         try:
             parts.append(pipeline.chat(text, _text_history(history)))

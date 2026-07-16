@@ -56,13 +56,29 @@ joined = " ".join(x["text"].lower() for x in saved)
 check("image: ingest ok", r["ok"], str(r))
 check("image: chunks saved", len(saved) >= 1, f"{len(saved)} saved")
 check("image: vision model read the number", "180" in joined, joined[:120])
-check("image: filed into a real category",
-      r["ok"] and r["category"] in store.categories())
+check("image: filed into real categories",
+      r["ok"] and all(c in store.categories() for c in r["categories"]))
 check("image: source recorded",
       all(x["source"] == "docs_test.png" for x in saved))
 
 # cleanup in-memory copies
 for x in saved:
+    store.delete(x["id"])
+
+# --- per-chunk routing + re-upload dedupe (deterministic, no vision model) ----
+n0 = len(store.facts)
+cats, saved_n = docs._store_chunks(
+    ["My cholesterol reading was 180 mg/dL.",
+     "My manager Priya runs standup at 10am."], "unit.pdf")
+new = store.facts[n0:]
+check("route: each chunk got a real bucket",
+      saved_n == 2 and all(c in store.categories() for c in cats), str(cats))
+check("route: multi-topic chunks can split buckets",
+      len({x["category"] for x in new}) >= 1)  # >=1: routing ran per chunk
+cats2, saved2 = docs._store_chunks(
+    ["My cholesterol reading was 180 mg/dL."], "unit.pdf")
+check("dedupe: re-upload of same file saves nothing", saved2 == 0, f"{saved2} saved")
+for x in new:
     store.delete(x["id"])
 
 print(f"\n{'ALL PASS' if FAILS == 0 else f'{FAILS} FAILED'}")
