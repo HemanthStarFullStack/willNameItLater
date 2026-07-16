@@ -7,7 +7,10 @@ workflows:
     instance_type: mac_mini_m2
     max_build_duration: 45
     environment:
-      flutter: stable
+      # Pinned to the version validated locally (flutter analyze clean, deps
+      # resolved). 'stable' could float to a newer release that removed an API
+      # we use; pin so the cloud build reproduces exactly what passed here.
+      flutter: 3.44.5
     scripts:
       - name: Flutter packages
         script: cd mobile && flutter pub get
