@@ -2,25 +2,43 @@ import 'package:flutter/material.dart';
 import 'package:flutter_gemma/flutter_gemma.dart';
 import 'package:flutter_gemma_mediapipe/flutter_gemma_mediapipe.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:system_info_plus/system_info_plus.dart';
 
-// Two Gemma options for an M2 iPad (8GB unified memory):
-// - 1B: small, ungated, fast download -> proves the pipeline end to end.
-// - 3n E2B: the real deal (multimodal-class quality), gated on HuggingFace ->
-//   needs a free HF token with the Gemma license accepted.
+// On-device model ladder, smallest first. `minRamGB` is the total device RAM
+// below which we won't auto-pick a model (weights + KV cache + the app all have
+// to fit in memory or the OS kills us). Gated models sit behind a free
+// HuggingFace token with the Gemma license accepted.
 const _models = [
   (
-    name: 'Gemma 3 1B (quick test, ~550 MB)',
+    name: 'Gemma 3 1B',
+    size: '~550 MB',
+    minRamGB: 0.0,
+    gated: false,
     url: 'https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/'
         'Gemma3-1B-IT_multi-prefill-seq_q8_ekv2048.task',
-    gated: false,
   ),
   (
-    name: 'Gemma 3n E2B (full, ~3.1 GB, needs HF token)',
+    name: 'Gemma 3n E2B',
+    size: '~3.1 GB',
+    minRamGB: 6.0,
+    gated: true,
     url: 'https://huggingface.co/google/gemma-3n-E2B-it-litert-preview/'
         'resolve/main/gemma-3n-E2B-it-int4.task',
-    gated: true,
   ),
 ];
+
+// Let the device's specs choose: the biggest model whose RAM floor it clears.
+// Gated models are skipped when there's no token (we can't download them), so
+// the auto-pick always lands on something actually installable.
+int _pickModel(double ramGB, bool hasToken) {
+  var best = 0;
+  for (var i = 0; i < _models.length; i++) {
+    if (ramGB >= _models[i].minRamGB && (!_models[i].gated || hasToken)) {
+      best = i;
+    }
+  }
+  return best;
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -52,6 +70,7 @@ class _HomeState extends State<Home> {
   final _input = TextEditingController();
   final _token = TextEditingController();
   int _modelIx = 0;
+  double? _ramGB;
   double? _progress;
   String? _status;
   bool _generating = false;
@@ -65,6 +84,15 @@ class _HomeState extends State<Home> {
   Future<void> _restore() async {
     final prefs = await SharedPreferences.getInstance();
     _token.text = prefs.getString('hf_token') ?? '';
+
+    // Read total RAM and let the phone's specs choose the model automatically.
+    final mb = await SystemInfoPlus.physicalMemory ?? 0;
+    final ramGB = mb / 1024.0;
+    setState(() {
+      _ramGB = ramGB > 0 ? ramGB : null;
+      _modelIx = _pickModel(ramGB, _token.text.trim().isNotEmpty);
+    });
+
     if (FlutterGemma.hasActiveModel()) {
       try {
         await _loadModel();
@@ -158,14 +186,20 @@ class _HomeState extends State<Home> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text('Pick a model to run fully on this device. '
-              'Nothing you type ever leaves the iPad.'),
+          Text(
+            _ramGB == null
+                ? 'Reading your device to choose a model…'
+                : 'Your device has ${_ramGB!.toStringAsFixed(1)} GB RAM — '
+                    'auto-selected ${_models[_modelIx].name}. Everything runs '
+                    'on the device; nothing you type ever leaves it.',
+          ),
           const SizedBox(height: 16),
           for (var i = 0; i < _models.length; i++)
             RadioListTile<int>(
               value: i,
               groupValue: _modelIx,
-              title: Text(_models[i].name),
+              title: Text('${_models[i].name}  (${_models[i].size})'
+                  '${_models[i].gated ? ' — needs HF token' : ''}'),
               onChanged: _progress != null
                   ? null
                   : (v) => setState(() => _modelIx = v!),

@@ -12,6 +12,7 @@ dependencies:
   flutter_gemma: ^1.2.3
   flutter_gemma_mediapipe: ^1.0.4
   shared_preferences: ^2.5.5
+  system_info_plus: ^0.0.6
 
 dev_dependencies:
   flutter_test:
