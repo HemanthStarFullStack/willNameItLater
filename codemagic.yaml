@@ -26,3 +26,22 @@ workflows:
           zip -qr OnDeviceAI.ipa Payload
     artifacts:
       - mobile/build/ios/iphoneos/OnDeviceAI.ipa
+
+  # Android is far simpler than iOS: the release APK is signed with the debug
+  # key (see android/app/build.gradle.kts), so it installs by just downloading
+  # and tapping it on the phone — no signing, no cable, no Sideloadly. Built on
+  # the Mac instance (same free plan the iOS build uses; a Mac has the Android
+  # SDK too). Universal APK = runs on any phone ABI, at the cost of size.
+  android-apk:
+    name: Android APK
+    instance_type: mac_mini_m2
+    max_build_duration: 45
+    environment:
+      flutter: 3.44.5
+    scripts:
+      - name: Flutter packages
+        script: cd mobile && flutter pub get
+      - name: Build APK (release, debug-signed -> installable)
+        script: cd mobile && flutter build apk --release
+    artifacts:
+      - mobile/build/app/outputs/flutter-apk/*.apk
