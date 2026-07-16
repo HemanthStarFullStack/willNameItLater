@@ -27,7 +27,11 @@ require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelpe
 flutter_ios_podfile_setup
 
 target 'Runner' do
-  use_frameworks!
+  # MediaPipe (flutter_gemma) ships STATIC xcframeworks. Plain `use_frameworks!`
+  # links dynamically and CocoaPods refuses to pull static frameworks into a
+  # dynamic target ("transitive dependencies that include statically linked
+  # binaries"). Static linkage is the documented fix.
+  use_frameworks! :linkage => :static
 
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
   target 'RunnerTests' do
