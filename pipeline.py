@@ -2,6 +2,7 @@
 answers, and verifies. Every step records a trace so the UI can show its work.
 """
 import re
+from datetime import date
 
 import llm
 import router
@@ -42,9 +43,56 @@ def ingest(text, source=""):
     return {"ok": True, "category": category, "id": fid}
 
 
+_MONTHS = {m: i for i, m in enumerate(
+    "jan feb mar apr may jun jul aug sep oct nov dec".split(), 1)}
+_RANGE = re.compile(
+    r"\b([a-z]{3})[a-z]*\.?\s+(\d{4})\s*(?:-|–|—|to)\s*"
+    r"(?:([a-z]{3})[a-z]*\.?\s+(\d{4})|(present|current|now|today|ongoing))\b",
+    re.I)
+
+
+def _span(n):
+    y, mo = divmod(n, 12)
+    parts = [p for p in (f"{y} year{'s' * (y != 1)}" if y else "",
+                         f"{mo} month{'s' * (mo != 1)}" if mo else "") if p]
+    return " ".join(parts)
+
+
+def _durations(text):
+    """Month spans for every 'Month YYYY - Month YYYY' range in the notes.
+
+    ponytail: the 1.7B read "January 2024 - April 2025" and answered "about 10
+    months". Arithmetic is a decision, and decisions are code here — the model
+    only reads the number out. Month granularity only; day-level ranges and
+    overlapping-job totals aren't handled, add them when a note needs it.
+    """
+    out = []
+    today = date.today()
+    for m in _RANGE.finditer(text):
+        a, ya, b, yb, ongoing = m.groups()
+        if a.lower() not in _MONTHS:
+            continue
+        if ongoing:
+            end = (today.year, today.month)
+        elif b and b.lower() in _MONTHS:
+            end = (int(yb), _MONTHS[b.lower()])
+        else:
+            continue
+        n = (end[0] - int(ya)) * 12 + (end[1] - _MONTHS[a.lower()])
+        if 0 < n < 1200:
+            out.append(f"{m.group(0)} = {n} months ({_span(n)})")
+    return list(dict.fromkeys(out))  # same range in repeated chunks -> once
+
+
 def _fmt(hits):
-    return "\n".join(f'[{i+1}] ({h["category"]}) {h["text"]}'
+    body = "\n".join(f'[{i+1}] ({h["category"]}) {h["text"]}'
                      for i, h in enumerate(hits))
+    spans = _durations(body)
+    if spans:
+        body += ("\n\nDurations already calculated for you — use these exact "
+                 "numbers, never recompute them:\n"
+                 + "\n".join(f"- {s}" for s in spans))
+    return body
 
 
 def _crag(query, hits):
@@ -441,7 +489,9 @@ def _answer_one(message, history, steps):
             "State the actual value from the NOTES; never just repeat the "
             "question, and never copy a note word-for-word as the whole reply. "
             "Use a note even if its wording differs. Do not add anything not "
-            "asked; no reference numbers like [1] or category tags. If the "
+            "asked; no reference numbers like [1] or category tags. Never do "
+            "arithmetic: use durations exactly as listed and never add them "
+            "together or work out a new figure. If the "
             "NOTES do not actually contain the answer, reply exactly: \"I don't "
             'have that in your data yet." — never substitute a different fact.',
             system="You answer strictly from the user's notes. Never invent facts.",
@@ -450,7 +500,14 @@ def _answer_one(message, history, steps):
         steps.append(f"verify: {'✔ grounded' if verdict.get('grounded', True) else '✘ unverified'}"
                      f" ({verdict.get('reason', '')})")
         if not verdict.get("grounded", True):
-            answer += "\n\n_(couldn't fully verify this against your notes)_"
+            # ponytail: don't state a flagged claim and apologise under it —
+            # "never lies" is the point. HHEM separates cleanly here (grounded
+            # 0.83-0.94, hallucinations 0.01-0.02), so trust it and withhold.
+            answer = ("I can't back that up from your notes, so I won't guess."
+                      + (f"\n\nWhat I do have:\n"
+                         + "\n".join(f"- {s}" for s in _durations(context))
+                         if _durations(context) else "")
+                      + f"\n\n<sub>_(unverified draft: {answer})_</sub>")
         which = expert or hits[0]["category"]
         return answer, f"🧠 {which} memory · match {score:.2f}"
 
@@ -538,7 +595,10 @@ def _chat_or_search(message, history, notes=()):
                    "know about them when it genuinely helps: to encourage them, "
                    "give advice that fits their life, or connect things. Never "
                    "recite their details back at them, and never mention facts "
-                   "that aren't relevant. Two to four sentences.",
+                   "that aren't relevant. Never do arithmetic: use any duration "
+                   "exactly as given and never add durations together. If they "
+                   "correct you, accept it and reply afresh — never repeat your "
+                   "previous answer. Two to four sentences.",
             temperature=0.7)  # conversation, not extraction
         return answer, False
 

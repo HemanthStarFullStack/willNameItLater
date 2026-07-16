@@ -4,10 +4,15 @@ Prints per-case verdicts; exits 1 if any case picks the wrong tool.
 """
 import os
 import sys
+import time
 
 import ollama
 
 MODEL = os.environ.get("CHAT_MODEL", "qwen3:4b")
+# Must match how the app loads the model. Qwen3.5 defaults to a 256K window,
+# which alone blows the KV cache past this GPU (measured: 23GB "size", 73% on
+# CPU). The app pins 4096, so the bench has to as well or it measures nothing.
+NUM_CTX = int(os.environ.get("NUM_CTX", "4096"))
 
 TOOLS = [
     {"type": "function", "function": {
@@ -51,18 +56,27 @@ CASES = [
 ]
 
 fails = 0
+times = []
 for msg, want in CASES:
+    t0 = time.time()
     resp = ollama.chat(model=MODEL, think=False, keep_alive="10m",
                        messages=[{"role": "system", "content": SYSTEM},
                                  {"role": "user", "content": msg}],
-                       tools=TOOLS, options={"temperature": 0})
+                       tools=TOOLS,
+                       options={"temperature": 0, "num_ctx": NUM_CTX})
+    dt = time.time() - t0
+    times.append(dt)
     calls = resp.message.tool_calls or []
     got = calls[0].function.name if calls else None
     ok = got == want
     if not ok:
         fails += 1
     args = dict(calls[0].function.arguments) if calls else ""
-    print(f'{"PASS" if ok else "FAIL"}  {msg!r:42} want={want} got={got} {args}')
+    print(f'{"PASS" if ok else "FAIL"}  {dt:6.1f}s  {msg!r:42} '
+          f'want={want} got={got} {args}')
 
-print(f"\n{len(CASES) - fails}/{len(CASES)} correct")
+# Correctness is only half the question: a model that picks the right tool but
+# spills to CPU is unusable. qwen3:4b scored 10/10 here at ~198s/answer.
+print(f"\n{MODEL}: {len(CASES) - fails}/{len(CASES)} correct · "
+      f"median {sorted(times)[len(times)//2]:.1f}s · slowest {max(times):.1f}s")
 sys.exit(1 if fails else 0)

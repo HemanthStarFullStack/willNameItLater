@@ -50,6 +50,21 @@ check("lookup: encouragement is not a lookup",
       not pipeline._is_lookup("what do you think about my career"))
 check("lookup: small talk is not a lookup", not pipeline._is_lookup("tell me a joke"))
 
+# --- duration math (the 1.7B called Jan 2024 - Apr 2025 "about 10 months") ---
+d = pipeline._durations("Software Engineer - DHIRA January 2024 - April 2025")
+check("durations: computes the span", d and "15 months" in d[0], str(d))
+check("durations: human span", d and "1 year 3 months" in d[0], str(d))
+check("durations: 'present' resolves to today",
+      len(pipeline._durations("worked there March 2025 - Present")) == 1)
+check("durations: no range -> nothing", pipeline._durations("no dates here") == [])
+check("durations: backwards range ignored",
+      pipeline._durations("April 2025 - January 2024") == [])
+check("durations: repeated range dedupes",
+      len(pipeline._durations("Jan 2024 - Apr 2025 ... Jan 2024 - Apr 2025")) == 1)
+check("fmt: injects the computed span",
+      "15 months" in pipeline._fmt(
+          [{"category": "Work", "text": "DHIRA January 2024 - April 2025"}]))
+
 # --- store update/delete roundtrip -------------------------------------------
 n0 = len(store.facts)
 fid = store.add("Temporary test fact about kayaking.", "Personal")
