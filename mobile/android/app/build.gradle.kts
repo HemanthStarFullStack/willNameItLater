@@ -27,9 +27,14 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
+            // Signing with the debug key so the APK installs without a keystore.
             signingConfig = signingConfigs.getByName("debug")
+            // MediaPipe (flutter_gemma) references classes R8 can't resolve
+            // (e.g. com.google.auto.value...Memoized), so release shrinking dies
+            // with "Missing classes detected while running R8". A test build
+            // doesn't need shrinking — turn it off so the build completes.
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }
