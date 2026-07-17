@@ -29,10 +29,14 @@ android {
         release {
             // Signing with the debug key so the APK installs without a keystore.
             signingConfig = signingConfigs.getByName("debug")
-            // We don't need R8 shrinking for a test build; leave it off so the
-            // build can't trip on missing-class references from native deps.
-            isMinifyEnabled = false
-            isShrinkResources = false
+            // R8 shrinks classes.dex ~9 MB -> ~3 MB; JNI-reached classes and
+            // compile-time-only annotations are handled in proguard-rules.pro.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 
@@ -55,4 +59,11 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+// fonnx pulls onnxruntime-extensions (custom ops for exotic models) but only
+// touches it behind an isOrtExtensionsEnabled flag that MiniLM never sets —
+// ~6 MB of native libs we never load. Excluded to fit delivery size limits.
+configurations.all {
+    exclude(group = "com.microsoft.onnxruntime", module = "onnxruntime-extensions-android")
 }
