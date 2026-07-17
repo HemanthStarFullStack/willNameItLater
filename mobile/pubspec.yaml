@@ -11,6 +11,12 @@ dependencies:
     sdk: flutter
   # llama.cpp (GGUF) on-device inference — open models, no HuggingFace token.
   lib_llama_cpp: ^0.7.3
+  # On-device ONNX text embeddings (replaces nomic-embed/Ollama) — powers the
+  # vector half of hybrid retrieval + centroid routing. MiniLM-L6-v2 via
+  # bundled ONNX Runtime, built-in WordPiece tokenizer, no Rust toolchain.
+  fonnx:
+    git:
+      url: https://github.com/Telosnex/fonnx.git
   dio: ^5.7.0                # model download with progress
   path_provider: ^2.1.5     # where to store the downloaded .gguf
   shared_preferences: ^2.5.5

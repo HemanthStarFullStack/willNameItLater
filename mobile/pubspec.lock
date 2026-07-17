@@ -128,6 +128,15 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
+  fonnx:
+    dependency: "direct main"
+    description:
+      path: "."
+      ref: HEAD
+      resolved-ref: e2488a39325be5d04bdc0b844272b84a853f2337
+      url: "https://github.com/Telosnex/fonnx.git"
+    source: git
+    version: "0.0.1"
   hooks:
     dependency: transitive
     description:
@@ -304,6 +313,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.0.0"
+  ml_linalg:
+    dependency: transitive
+    description:
+      name: ml_linalg
+      sha256: beaebe2b85e9f1f6233a19098883f1f1596ce6ed05a03bc51ac552420507265e
+      url: "https://pub.dev"
+    source: hosted
+    version: "13.12.7"
   objective_c:
     dependency: transitive
     description:
@@ -400,6 +417,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.2.0"
+  quiver:
+    dependency: transitive
+    description:
+      name: quiver
+      sha256: ea0b925899e64ecdfbf9c7becb60d5b50e706ade44a85b2363be2a22d88117d2
+      url: "https://pub.dev"
+    source: hosted
+    version: "3.2.2"
   record_use:
     dependency: transitive
     description:

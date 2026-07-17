@@ -1,62 +1,72 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
-import 'package:lib_llama_cpp/lib_llama_cpp.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:system_info_plus/system_info_plus.dart';
 
-/// One on-device model. Everything the picker needs to score it against a
-/// phone. `minRamGB` = the device RAM floor to run it at all; `quality` is a
-/// hand-curated 0–100 benchmark proxy (small-model instruct reputation), used
-/// only to *rank* models that fit — like the desktop "which LLM fits" tools,
-/// scaled down to what actually runs on a phone. All URLs are open GGUF (Qwen
-/// official or bartowski mirrors) — no HuggingFace token.
+import 'brain/embedder.dart';
+import 'brain/llm.dart';
+import 'brain/pipeline.dart';
+import 'brain/router.dart' as brain;
+import 'brain/store.dart';
+
+/// One on-device model. `minRamGB` = the device RAM floor to run it at all;
+/// `quality` is a hand-curated 0–100 benchmark proxy used to rank models that
+/// fit — like the desktop "which LLM fits" tools, scaled to phones.
+/// Current-generation (2025-26) models only; every URL is an open GGUF
+/// (official/ggml-org/unsloth mirrors, verified 302-public) — no HuggingFace
+/// token. `thinks` marks models that emit <think>…</think> reasoning blocks.
 class Model {
   final String name, family, file, url;
   final double params, sizeGB, minRamGB;
   final int quality, year;
+  final bool thinks;
   const Model(this.name, this.family, this.params, this.sizeGB, this.minRamGB,
-      this.quality, this.year, this.file, this.url);
+      this.quality, this.year, this.file, this.url,
+      {this.thinks = false});
 }
 
 const _catalog = <Model>[
-  Model('SmolLM2 360M', 'SmolLM2', 0.36, 0.3, 1.5, 34, 2024,
-      'SmolLM2-360M-Instruct-Q4_K_M.gguf',
-      'https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf'),
-  Model('Qwen2.5 0.5B', 'Qwen2.5', 0.5, 0.4, 2.0, 44, 2024,
-      'qwen2.5-0.5b-instruct-q4_k_m.gguf',
-      'https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf'),
-  Model('Llama 3.2 1B', 'Llama', 1.0, 0.8, 3.0, 52, 2024,
-      'Llama-3.2-1B-Instruct-Q4_K_M.gguf',
-      'https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf'),
-  Model('Qwen2.5 1.5B', 'Qwen2.5', 1.5, 1.0, 3.0, 62, 2024,
-      'qwen2.5-1.5b-instruct-q4_k_m.gguf',
-      'https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf'),
-  Model('SmolLM2 1.7B', 'SmolLM2', 1.7, 1.1, 3.0, 56, 2024,
-      'SmolLM2-1.7B-Instruct-Q4_K_M.gguf',
-      'https://huggingface.co/bartowski/SmolLM2-1.7B-Instruct-GGUF/resolve/main/SmolLM2-1.7B-Instruct-Q4_K_M.gguf'),
-  Model('Gemma 2 2B', 'Gemma', 2.6, 1.7, 4.0, 67, 2024,
-      'gemma-2-2b-it-Q4_K_M.gguf',
-      'https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf'),
-  Model('Llama 3.2 3B', 'Llama', 3.0, 2.0, 6.0, 72, 2024,
-      'Llama-3.2-3B-Instruct-Q4_K_M.gguf',
-      'https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf'),
-  Model('Qwen2.5 3B', 'Qwen2.5', 3.0, 2.0, 6.0, 74, 2024,
-      'qwen2.5-3b-instruct-q4_k_m.gguf',
-      'https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf'),
-  Model('Phi-3.5 mini', 'Phi', 3.8, 2.3, 6.0, 78, 2024,
-      'Phi-3.5-mini-instruct-Q4_K_M.gguf',
-      'https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf'),
+  Model('Qwen3 0.6B', 'Qwen3', 0.6, 0.5, 0, 44, 2025,
+      'Qwen3-0.6B-Q4_K_M.gguf',
+      'https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q4_K_M.gguf',
+      thinks: true),
+  Model('Gemma 3 1B', 'Gemma', 1.0, 0.8, 2.5, 52, 2025,
+      'gemma-3-1b-it-Q4_K_M.gguf',
+      'https://huggingface.co/ggml-org/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_K_M.gguf'),
+  Model('DeepSeek R1 1.5B', 'DeepSeek', 1.5, 1.1, 3.0, 58, 2025,
+      'DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf',
+      'https://huggingface.co/unsloth/DeepSeek-R1-Distill-Qwen-1.5B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf',
+      thinks: true),
+  Model('Qwen3 1.7B', 'Qwen3', 1.7, 1.3, 3.0, 63, 2025,
+      'Qwen3-1.7B-Q4_K_M.gguf',
+      'https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_K_M.gguf',
+      thinks: true),
+  Model('SmolLM3 3B', 'SmolLM3', 3.0, 1.9, 5.0, 72, 2025,
+      'SmolLM3-3B-Q4_K_M.gguf',
+      'https://huggingface.co/unsloth/SmolLM3-3B-GGUF/resolve/main/SmolLM3-3B-Q4_K_M.gguf'),
+  Model('Gemma 3 4B', 'Gemma', 4.0, 2.5, 6.0, 79, 2025,
+      'gemma-3-4b-it-Q4_K_M.gguf',
+      'https://huggingface.co/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf'),
+  Model('Phi-4 mini', 'Phi', 3.8, 2.5, 6.0, 80, 2025,
+      'Phi-4-mini-instruct-Q4_K_M.gguf',
+      'https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF/resolve/main/Phi-4-mini-instruct-Q4_K_M.gguf'),
+  Model('Qwen3 4B (2507)', 'Qwen3', 4.0, 2.5, 6.0, 84, 2025,
+      'Qwen3-4B-Instruct-2507-Q4_K_M.gguf',
+      'https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf'),
 ];
 
-// Fit against a device's RAM: 2 = comfortable, 1 = tight, 0 = won't run.
+/// The on-device embedder (MiniLM-L6-v2 ONNX) — powers hybrid retrieval and
+/// bucket routing. Ships in the fonnx repo; one-time ~20 MB download.
+const _embedderUrl =
+    'https://github.com/Telosnex/fonnx/raw/main/example/assets/models/miniLmL6V2/miniLmL6V2.onnx';
+const _embedderFile = 'miniLmL6V2.onnx';
+
 int _fit(Model m, double ramGB) =>
     ramGB >= m.minRamGB * 1.4 ? 2 : (ramGB >= m.minRamGB ? 1 : 0);
 
-// Whole catalog ranked for this device: models that fit first (best quality on
-// top), then the ones that don't — kept visible so you can see what a bigger
-// phone would unlock, exactly like the desktop hardware-scan tools.
 List<Model> _ranked(double ramGB) {
   final list = [..._catalog];
   list.sort((a, b) {
@@ -68,7 +78,6 @@ List<Model> _ranked(double ramGB) {
   return list;
 }
 
-// The single best model this device can run (highest quality that fits).
 Model _best(double ramGB) => _ranked(ramGB).firstWhere(
       (m) => _fit(m, ramGB) > 0,
       orElse: () => _catalog.first,
@@ -76,6 +85,17 @@ Model _best(double ramGB) => _ranked(ramGB).firstWhere(
 
 String _tier(int q) =>
     q >= 75 ? 'excellent' : (q >= 62 ? 'strong' : (q >= 48 ? 'good' : 'basic'));
+
+/// A few sample memories so the app is queryable on first open (app.py).
+const _samples = [
+  ('My blood group is O positive.', 'Health'),
+  ("I'm allergic to penicillin.", 'Health'),
+  ('My health insurance policy is HLT-889241, renews every March.', 'Money'),
+  ('Home wifi password is bluefalcon77.', 'Home'),
+  ('My manager is Priya; standup is 10am daily on weekdays.', 'Work'),
+  ('Passport number X1234567, expires in 2029.', 'Personal'),
+  ("I'm learning Flutter and Dart this year.", 'Learning'),
+];
 
 void main() => runApp(const App());
 
@@ -90,6 +110,23 @@ class App extends StatelessWidget {
       );
 }
 
+class Msg {
+  final String role;
+  String content;
+  String footer;
+  List<String> steps;
+  Msg(this.role, this.content, {this.footer = '', this.steps = const []});
+
+  Map<String, dynamic> toJson() =>
+      {'role': role, 'content': content, 'footer': footer, 'steps': steps};
+  static Msg fromJson(Map<String, dynamic> j) => Msg(
+        j['role'] as String,
+        j['content'] as String,
+        footer: (j['footer'] ?? '') as String,
+        steps: [for (final s in (j['steps'] ?? const [])) s as String],
+      );
+}
+
 class Home extends StatefulWidget {
   const Home({super.key});
 
@@ -98,15 +135,26 @@ class Home extends StatefulWidget {
 }
 
 class _HomeState extends State<Home> {
-  LlamaOpenAIClient? _client;
-  final _messages = <({String text, bool isUser})>[];
-  final _turns = <LlamaResponseInputItem>[]; // role-tagged chat history
-  final _input = TextEditingController();
+  // Brain
+  final _llm = Llm();
+  final _embedder = Embedder();
+  MemoryStore? _store;
+  Pipeline? _pipeline;
+
+  // Setup state
   Model? _selected;
   double? _ramGB;
   double? _progress;
   String? _status;
+  bool _booted = false;
+
+  // Chat state
+  final _messages = <Msg>[];
+  final _input = TextEditingController();
+  final _scroll = ScrollController();
   bool _generating = false;
+  String _liveStep = '';
+  late String _dataDir;
 
   @override
   void initState() {
@@ -114,8 +162,10 @@ class _HomeState extends State<Home> {
     _restore();
   }
 
+  Future<String> _path(String file) async => '$_dataDir/$file';
+
   Future<void> _restore() async {
-    // Scan the hardware (RAM) and auto-select the best model that fits.
+    _dataDir = (await getApplicationDocumentsDirectory()).path;
     final mb = await SystemInfoPlus.physicalMemory ?? 0;
     final ramGB = mb / 1024.0;
     final best = _best(ramGB);
@@ -123,45 +173,45 @@ class _HomeState extends State<Home> {
       _ramGB = ramGB > 0 ? ramGB : null;
       _selected = best;
     });
-    final path = await _modelPath(best.file);
-    if (File(path).existsSync()) _load(path);
-  }
-
-  Future<String> _modelPath(String file) async {
-    final dir = await getApplicationDocumentsDirectory();
-    return '${dir.path}/$file';
-  }
-
-  void _load(String path) {
-    setState(() {
-      _client = LlamaOpenAIClient(
-        models: {'local': LlamaModelConfig(modelPath: path)},
-      );
-      _status = null;
-    });
+    if (File(await _path(best.file)).existsSync() &&
+        File(await _path(_embedderFile)).existsSync()) {
+      await _boot(best);
+    }
   }
 
   Future<void> _download() async {
     final m = _selected;
     if (m == null) return;
-    final path = await _modelPath(m.file);
-    if (File(path).existsSync()) {
-      _load(path);
-      return;
-    }
-    setState(() {
-      _progress = 0;
-      _status = 'Downloading ${m.name} (${m.sizeGB.toStringAsFixed(1)} GB)… '
-          'first time only.';
-    });
     try {
-      // .part then rename, so an interrupted download isn't taken for complete.
-      await Dio().download(m.url, '$path.part',
-          onReceiveProgress: (rec, total) {
-        if (total > 0) setState(() => _progress = rec / total);
-      });
-      await File('$path.part').rename(path);
-      _load(path);
+      // Embedder first (small); then the chat model. .part-then-rename so an
+      // interrupted download is never mistaken for a complete file.
+      final ePath = await _path(_embedderFile);
+      if (!File(ePath).existsSync()) {
+        setState(() {
+          _progress = 0;
+          _status = 'Downloading memory engine (~20 MB)…';
+        });
+        await Dio().download(_embedderUrl, '$ePath.part',
+            onReceiveProgress: (r, t) {
+          if (t > 0) setState(() => _progress = r / t);
+        });
+        await File('$ePath.part').rename(ePath);
+      }
+      final gPath = await _path(m.file);
+      if (!File(gPath).existsSync()) {
+        setState(() {
+          _progress = 0;
+          _status = 'Downloading ${m.name} '
+              '(${m.sizeGB.toStringAsFixed(1)} GB)… first time only.';
+        });
+        await Dio().download(m.url, '$gPath.part',
+            onReceiveProgress: (r, t) {
+          if (t > 0) setState(() => _progress = r / t);
+        });
+        await File('$gPath.part').rename(gPath);
+      }
+      setState(() => _status = 'Preparing your memories…');
+      await _boot(m);
     } catch (e) {
       setState(() => _status = 'Download failed: $e');
     } finally {
@@ -169,63 +219,123 @@ class _HomeState extends State<Home> {
     }
   }
 
+  Future<void> _boot(Model m) async {
+    _embedder.load(await _path(_embedderFile));
+    await _llm.load(await _path(m.file));
+    _llm.noThinkSuffix =
+        (m.family == 'Qwen3' && m.thinks) ? ' /no_think' : '';
+
+    final store = MemoryStore(_embedder, await _path('memories.json'));
+    await store.load();
+    if (store.facts.isEmpty) {
+      for (final (text, cat) in _samples) {
+        await store.add(text, cat);
+      }
+    }
+    final router = brain.Router(_llm, _embedder, store);
+    final pipeline = Pipeline(_llm, router, store);
+    pipeline.onStep = (s) => setState(() => _liveStep = s);
+    pipeline.onPartial = (partial) => setState(() {
+          if (_messages.isNotEmpty && _messages.last.role == 'assistant') {
+            _messages.last.content = partial;
+          }
+        });
+
+    // Restore chat history (last 200 messages survive restarts).
+    try {
+      final f = File(await _path('chats.json'));
+      if (f.existsSync()) {
+        final raw = json.decode(await f.readAsString()) as List;
+        _messages.addAll(
+            raw.map((e) => Msg.fromJson(e as Map<String, dynamic>)));
+      }
+    } catch (_) {}
+
+    setState(() {
+      _store = store;
+      _pipeline = pipeline;
+      _booted = true;
+      _status = null;
+    });
+  }
+
+  Future<void> _saveChats() async {
+    final tail = _messages.length <= 200
+        ? _messages
+        : _messages.sublist(_messages.length - 200);
+    await File(await _path('chats.json'))
+        .writeAsString(json.encode([for (final m in tail) m.toJson()]));
+  }
+
   Future<void> _send() async {
     final text = _input.text.trim();
-    final client = _client;
-    if (text.isEmpty || client == null || _generating) return;
+    final pipeline = _pipeline;
+    if (text.isEmpty || pipeline == null || _generating) return;
     _input.clear();
-    // Role-tagged history. The `name` field is what forces lib_llama_cpp down
-    // its chat-template path (generateMessages) instead of raw completion —
-    // without it the model gets an un-templated prompt and rambles into
-    // nonsense. Standard chat templates ignore `name`, so it's harmless.
-    _turns.add(LlamaResponseInputItem(role: 'user', content: text, name: 'u'));
+    final history = [
+      for (final m in _messages) (role: m.role, content: m.content),
+    ];
     setState(() {
-      _messages.add((text: text, isUser: true));
-      _messages.add((text: '', isUser: false));
+      _messages.add(Msg('user', text));
+      _messages.add(Msg('assistant', ''));
       _generating = true;
+      _liveStep = 'thinking…';
     });
-    final reply = StringBuffer();
     try {
-      await for (final event in client.responses.stream(
-        model: 'local',
-        input: List<LlamaResponseInputItem>.from(_turns),
-        instructions:
-            'You are a helpful assistant. Answer clearly and concisely.',
-        temperature: 0.7, // greedy (no temp) loops/repeats on-device
-        topP: 0.9,
-        maxOutputTokens: 512,
-      )) {
-        if (event case LlamaResponseOutputTextDelta(:final delta)) {
-          reply.write(delta);
-          setState(() {
-            final last = _messages.removeLast();
-            _messages.add((text: last.text + delta, isUser: false));
-          });
-        }
-      }
-      _turns.add(LlamaResponseInputItem(
-          role: 'assistant', content: reply.toString(), name: 'a'));
-    } catch (e) {
+      final reply = await pipeline.chat(text, history);
       setState(() {
-        _messages.removeLast();
-        _messages.add((text: '⚠️ $e', isUser: false));
+        _messages.last
+          ..content = reply.answer
+          ..footer = reply.footer
+          ..steps = reply.steps;
       });
+    } catch (e) {
+      setState(() => _messages.last.content = '⚠️ $e');
     } finally {
-      setState(() => _generating = false);
+      setState(() {
+        _generating = false;
+        _liveStep = '';
+      });
+      await _saveChats();
+      if (_scroll.hasClients) {
+        _scroll.animateTo(_scroll.position.maxScrollExtent + 200,
+            duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+      }
     }
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('🧠 On-Device AI — private, local')),
-        body: _client == null ? _setup() : _chatView(),
-      );
+  Widget build(BuildContext context) {
+    if (!_booted) return Scaffold(body: SafeArea(child: _setup()));
+    return DefaultTabController(
+      length: 3,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('🧠 On-Device AI'),
+          actions: [
+            IconButton(
+              tooltip: 'Switch model',
+              icon: const Icon(Icons.tune),
+              onPressed:
+                  _generating ? null : () => setState(() => _booted = false),
+            ),
+          ],
+          bottom: const TabBar(tabs: [
+            Tab(text: 'Chat'),
+            Tab(text: 'Add memory'),
+            Tab(text: 'Memories'),
+          ]),
+        ),
+        body: TabBarView(children: [_chatTab(), _addTab(), _memoriesTab()]),
+      ),
+    );
+  }
+
+  // --- setup (model picker) --------------------------------------------------
 
   Widget _setup() {
     final ram = _ramGB;
-    if (ram == null) {
-      return const Center(child: Text('Scanning your device…'));
-    }
+    if (ram == null) return const Center(child: Text('Scanning your device…'));
     final ranked = _ranked(ram);
     final fitCount = _catalog.where((m) => _fit(m, ram) > 0).length;
     final best = _best(ram);
@@ -240,9 +350,7 @@ class _HomeState extends State<Home> {
           const SizedBox(height: 8),
           Expanded(
             child: ListView(
-              children: [
-                for (final m in ranked) _modelTile(m, ram, best),
-              ],
+              children: [for (final m in ranked) _modelTile(m, ram, best)],
             ),
           ),
           const SizedBox(height: 8),
@@ -255,7 +363,10 @@ class _HomeState extends State<Home> {
               onPressed: _selected == null ? null : _download,
               child: Text(_selected == null
                   ? 'No model fits this device'
-                  : 'Download & start  ·  ${_selected!.name}'),
+                  : (_booted
+                          ? 'Switch to'
+                          : 'Download & start') +
+                      '  ·  ${_selected!.name}'),
             ),
           if (_status != null) ...[
             const SizedBox(height: 10),
@@ -281,78 +392,220 @@ class _HomeState extends State<Home> {
     return RadioListTile<String>(
       value: m.file,
       groupValue: _selected?.file,
-      onChanged: _progress != null
-          ? null
-          : (_) => setState(() => _selected = m),
+      onChanged:
+          _progress != null ? null : (_) => setState(() => _selected = m),
       secondary: Text(badge, style: const TextStyle(fontSize: 18)),
-      title: Row(
-        children: [
-          Flexible(child: Text(m.name)),
-          if (rec)
-            const Padding(
-              padding: EdgeInsets.only(left: 8),
-              child: Text('★ best for you',
-                  style: TextStyle(fontSize: 12, color: Colors.indigo)),
-            ),
-        ],
-      ),
+      title: Row(children: [
+        Flexible(child: Text(m.name)),
+        if (rec)
+          const Padding(
+            padding: EdgeInsets.only(left: 8),
+            child: Text('★ best for you',
+                style: TextStyle(fontSize: 12, color: Colors.indigo)),
+          ),
+      ]),
       subtitle: Text('${m.params}B · ${m.sizeGB.toStringAsFixed(1)} GB · '
           '${_tier(m.quality)} · ${m.family}'),
     );
   }
 
-  Widget _chatView() {
+  // --- Chat tab ----------------------------------------------------------------
+
+  Widget _chatTab() {
     return Column(
       children: [
         Expanded(
           child: ListView.builder(
+            controller: _scroll,
             padding: const EdgeInsets.all(12),
             itemCount: _messages.length,
-            itemBuilder: (_, i) {
-              final m = _messages[i];
-              return Align(
-                alignment:
-                    m.isUser ? Alignment.centerRight : Alignment.centerLeft,
-                child: Container(
-                  margin: const EdgeInsets.symmetric(vertical: 4),
-                  padding: const EdgeInsets.all(12),
-                  constraints: const BoxConstraints(maxWidth: 520),
-                  decoration: BoxDecoration(
-                    color: m.isUser
-                        ? Theme.of(context).colorScheme.primaryContainer
-                        : Theme.of(context).colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Text(m.text.isEmpty ? '…' : m.text),
-                ),
-              );
-            },
+            itemBuilder: (_, i) => _bubble(_messages[i]),
           ),
         ),
+        if (_generating && _liveStep.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: Row(children: [
+              const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('🧭 $_liveStep',
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                    overflow: TextOverflow.ellipsis),
+              ),
+            ]),
+          ),
         SafeArea(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _input,
-                    onSubmitted: (_) => _send(),
-                    decoration: const InputDecoration(
-                      hintText: 'Ask anything — it stays on this device',
-                      border: OutlineInputBorder(),
-                    ),
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+            child: Row(children: [
+              Expanded(
+                child: TextField(
+                  controller: _input,
+                  onSubmitted: (_) => _send(),
+                  decoration: const InputDecoration(
+                    hintText: 'Ask anything — it stays on this device',
+                    border: OutlineInputBorder(),
                   ),
                 ),
-                const SizedBox(width: 8),
-                IconButton.filled(
-                  onPressed: _generating ? null : _send,
-                  icon: const Icon(Icons.arrow_upward),
-                ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 8),
+              IconButton.filled(
+                onPressed: _generating ? null : _send,
+                icon: const Icon(Icons.arrow_upward),
+              ),
+            ]),
           ),
         ),
+      ],
+    );
+  }
+
+  Widget _bubble(Msg m) {
+    final user = m.role == 'user';
+    return Align(
+      alignment: user ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.all(12),
+        constraints: const BoxConstraints(maxWidth: 520),
+        decoration: BoxDecoration(
+          color: user
+              ? Theme.of(context).colorScheme.primaryContainer
+              : Theme.of(context).colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(m.content.isEmpty ? '…' : m.content),
+            if (m.steps.isNotEmpty)
+              Theme(
+                data: Theme.of(context)
+                    .copyWith(dividerColor: Colors.transparent),
+                child: ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  dense: true,
+                  title: const Text('🧭 thought process',
+                      style: TextStyle(fontSize: 12, color: Colors.grey)),
+                  children: [
+                    for (var i = 0; i < m.steps.length; i++)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text('${i + 1}. ${m.steps[i]}',
+                            style: const TextStyle(
+                                fontSize: 11, color: Colors.grey)),
+                      ),
+                  ],
+                ),
+              ),
+            if (m.footer.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(m.footer,
+                    style: const TextStyle(fontSize: 11, color: Colors.grey)),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // --- Add memory tab ------------------------------------------------------------
+
+  final _addCtl = TextEditingController();
+  String _addResult = '';
+  bool _adding = false;
+
+  Widget _addTab() {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: _addCtl,
+            maxLines: 2,
+            decoration: const InputDecoration(
+              labelText: 'A fact to remember',
+              hintText: 'e.g. My car service is due every October.',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          FilledButton(
+            onPressed: _adding
+                ? null
+                : () async {
+                    final t = _addCtl.text.trim();
+                    if (t.isEmpty || _pipeline == null) return;
+                    setState(() {
+                      _adding = true;
+                      _addResult = 'Saving…';
+                    });
+                    final r = await _pipeline!.ingest(t);
+                    setState(() {
+                      _adding = false;
+                      _addResult = r.ok
+                          ? '✅ Saved to ${r.category} (memory #${r.id})'
+                          : r.msg;
+                      if (r.ok) _addCtl.clear();
+                    });
+                  },
+            child: const Text('Save'),
+          ),
+          const SizedBox(height: 12),
+          Text(_addResult),
+        ],
+      ),
+    );
+  }
+
+  // --- Memories tab ----------------------------------------------------------------
+
+  Widget _memoriesTab() {
+    final store = _store;
+    if (store == null || store.facts.isEmpty) {
+      return const Center(child: Text('No memories yet.'));
+    }
+    final cats = store.categories().keys.toList()..sort();
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        Text(
+          '${store.facts.length} memories — this is everything the AI knows '
+          'about you. Delete anything that\'s wrong.',
+          style: const TextStyle(fontSize: 13, color: Colors.grey),
+        ),
+        for (final cat in cats) ...[
+          Padding(
+            padding: const EdgeInsets.only(top: 12, bottom: 4),
+            child: Text(cat,
+                style:
+                    const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          ),
+          for (final f in store.factsIn(cat))
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: Text(f.text),
+              subtitle: f.source.isNotEmpty
+                  ? Text('from ${f.source}',
+                      style: const TextStyle(fontSize: 11))
+                  : null,
+              trailing: IconButton(
+                icon: const Icon(Icons.delete_outline, size: 20),
+                onPressed: () async {
+                  await store.delete(f.id);
+                  setState(() {});
+                },
+              ),
+            ),
+        ],
       ],
     );
   }
