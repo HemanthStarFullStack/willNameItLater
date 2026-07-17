@@ -297,12 +297,17 @@ class Pipeline {
     // delete; a wrong replace silently loses data.
     if (hits.isNotEmpty && score >= 0.60 && _updateCue.hasMatch(message)) {
       final old = hits.first;
-      var merged = (await llm.chat(
-        'OLD: "${old.text}"\nNEW: "$fact"\n\n'
-        'Write ONE short note: OLD updated by NEW, keeping anything '
-        'from OLD that NEW does not contradict. Output only the note.',
-      ))
-          .trim();
+      String merged;
+      try {
+        merged = (await llm.chat(
+          'OLD: "${old.text}"\nNEW: "$fact"\n\n'
+          'Write ONE short note: OLD updated by NEW, keeping anything '
+          'from OLD that NEW does not contradict. Output only the note.',
+        ))
+            .trim();
+      } catch (_) {
+        merged = fact; // merge failed -> keep the new statement as-is
+      }
       merged = merged.replaceAll(RegExp(r'^"|"$'), '');
       final covered = _coverage(merged, '${old.text} $fact');
       await store.update(old.id, covered >= 0.6 ? merged : fact);
@@ -354,13 +359,18 @@ class Pipeline {
       List<({String role, String content})> history, List<String> steps) async {
     if (history.isEmpty || !_followup.hasMatch(message)) return message;
     final convo = _recent(history);
-    var out = (await llm.chat(
-      'Conversation:\n$convo\n\nLatest user message: "$message"\n\n'
-      'Rewrite the latest message as ONE standalone question, replacing '
-      'pronouns with what they refer to. Output only the question.',
-    ))
-        .trim()
-        .replaceAll(RegExp(r'^"|"$'), '');
+    String out;
+    try {
+      out = (await llm.chat(
+        'Conversation:\n$convo\n\nLatest user message: "$message"\n\n'
+        'Rewrite the latest message as ONE standalone question, replacing '
+        'pronouns with what they refer to. Output only the question.',
+      ))
+          .trim()
+          .replaceAll(RegExp(r'^"|"$'), '');
+    } catch (_) {
+      return message; // rewrite is an optimisation, never a hard dependency
+    }
     if (out.isNotEmpty && out.length < 200) {
       steps.add('rewrote follow-up → $out');
       return out;
@@ -400,13 +410,18 @@ class Pipeline {
   /// merge step invent anything.
   Future<String> _combine(String message, List<String> parts) async {
     final joined = parts.join(' ');
-    final out = await llm.chat(
-      'QUESTION: $message\n\nFACTS:\n${parts.map((p) => '- $p').join('\n')}'
-      '\n\nWrite one short, natural reply addressed to the user (say '
-      '"your", not "my") answering the question using ONLY these facts. '
-      'Do not add anything new.',
-      system: 'You merge partial answers into one reply. Never add facts.',
-    );
+    final String out;
+    try {
+      out = await llm.chat(
+        'QUESTION: $message\n\nFACTS:\n${parts.map((p) => '- $p').join('\n')}'
+        '\n\nWrite one short, natural reply addressed to the user (say '
+        '"your", not "my") answering the question using ONLY these facts. '
+        'Do not add anything new.',
+        system: 'You merge partial answers into one reply. Never add facts.',
+      );
+    } catch (_) {
+      return joined; // the per-question answers are already usable
+    }
     return _coverage(out, joined) >= 0.6 ? out : joined;
   }
 
@@ -609,11 +624,15 @@ class Pipeline {
       footer = tag;
     }
 
-    final saved = await _maybeRemember(message);
-    if (saved != null) {
-      footer += ' · 💾 saved to $saved';
-      _step(steps, '💾 new fact detected → saved to $saved');
-    }
+    // The answer above is already final — a failure while saving facts must
+    // never surface as an error and destroy it.
+    try {
+      final saved = await _maybeRemember(message);
+      if (saved != null) {
+        footer += ' · 💾 saved to $saved';
+        _step(steps, '💾 new fact detected → saved to $saved');
+      }
+    } catch (_) {}
 
     return ChatReply(answer, footer, steps);
   }

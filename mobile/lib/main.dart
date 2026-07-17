@@ -67,12 +67,20 @@ const _embedderFile = 'miniLmL6V2.onnx';
 int _fit(Model m, double ramGB) =>
     ramGB >= m.minRamGB * 1.4 ? 2 : (ramGB >= m.minRamGB ? 1 : 0);
 
+/// CPU decode speed falls roughly with parameter count, and one chat turn
+/// runs several generations (route/answer/verify/save). Models above ~2B are
+/// answers-in-minutes on a phone — real quality, unusable latency.
+bool _fastOnPhone(Model m) => m.params <= 2.0;
+
 List<Model> _ranked(double ramGB) {
   final list = [..._catalog];
   list.sort((a, b) {
     final fa = _fit(a, ramGB) > 0 ? 1 : 0;
     final fb = _fit(b, ramGB) > 0 ? 1 : 0;
     if (fa != fb) return fb - fa;
+    final sa = _fastOnPhone(a) ? 1 : 0;
+    final sb = _fastOnPhone(b) ? 1 : 0;
+    if (sa != sb) return sb - sa; // responsive models first
     return b.quality.compareTo(a.quality);
   });
   return list;
@@ -290,7 +298,15 @@ class _HomeState extends State<Home> {
           ..steps = reply.steps;
       });
     } catch (e) {
-      setState(() => _messages.last.content = '⚠️ $e');
+      // Never wipe an answer that already streamed in — flag it instead.
+      setState(() {
+        final partial = _messages.last.content;
+        if (partial.isEmpty || partial == '💭 thinking…') {
+          _messages.last.content = '⚠️ $e';
+        } else {
+          _messages.last.footer = '⚠️ interrupted: $e';
+        }
+      });
     } finally {
       setState(() {
         _generating = false;
@@ -405,7 +421,8 @@ class _HomeState extends State<Home> {
           ),
       ]),
       subtitle: Text('${m.params}B · ${m.sizeGB.toStringAsFixed(1)} GB · '
-          '${_tier(m.quality)} · ${m.family}'),
+          '${_tier(m.quality)} · ${m.family}'
+          '${_fastOnPhone(m) ? '' : ' · 🐢 smarter but SLOW on a phone'}'),
     );
   }
 
