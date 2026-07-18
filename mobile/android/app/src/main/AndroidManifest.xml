@@ -4,7 +4,7 @@
          plugin, so declare it explicitly.) -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="ondevice_ai"
+        android:label="On-Device AI"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

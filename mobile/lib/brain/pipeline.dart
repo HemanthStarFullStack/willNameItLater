@@ -17,13 +17,14 @@ import 'store.dart';
 import 'web.dart';
 
 // --- config.py values -------------------------------------------------------
-// NOTE: cosine thresholds were calibrated on nomic-embed; MiniLM (the mobile
-// embedder) distributes cosines differently. Re-measure on device data before
-// trusting the gates hard. Starting points kept identical to the prototype.
+// Cosine gates calibrated for EmbeddingGemma-300M on the desktop harness
+// (2026-07-17, test/harness/embedder_test.dart): on-topic queries scored
+// ≥0.61 against their fact, off-topic questions peaked at 0.49 — so 0.55
+// separates cleanly. Re-run that test whenever the embedder changes.
 const kSearchK = 8;
 const kTopK = 5;
-const kRagThreshold = 0.52;
-const kChatContextFloor = 0.35;
+const kRagThreshold = 0.55;
+const kChatContextFloor = 0.42;
 
 class ChatReply {
   final String answer;

@@ -8,6 +8,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'embedder.dart';
+import 'vault.dart';
 
 class Fact {
   int id;
@@ -86,15 +87,21 @@ List<double> _bm25Scores(List<List<String>> docs, List<String> query) {
 class MemoryStore {
   final Embedder embedder;
   final String dataFile;
+
+  /// Encrypts memories at rest; null (tests) falls back to plaintext.
+  final Vault? vault;
   final List<Fact> facts = [];
 
-  MemoryStore(this.embedder, this.dataFile);
+  MemoryStore(this.embedder, this.dataFile, {this.vault});
 
   Future<void> load() async {
     final f = File(dataFile);
     if (!f.existsSync()) return;
     try {
-      final raw = json.decode(await f.readAsString()) as List;
+      final text =
+          vault != null ? await vault!.readString(f) : await f.readAsString();
+      if (text == null) return;
+      final raw = json.decode(text) as List;
       facts
         ..clear()
         ..addAll(raw.map((e) => Fact.fromJson(e as Map<String, dynamic>)));
@@ -105,8 +112,26 @@ class MemoryStore {
 
   Future<void> _save() async {
     final f = File(dataFile);
-    await f.parent.create(recursive: true);
-    await f.writeAsString(json.encode([for (final x in facts) x.toJson()]));
+    final encoded = json.encode([for (final x in facts) x.toJson()]);
+    if (vault != null) {
+      await vault!.writeString(f, encoded);
+    } else {
+      await f.parent.create(recursive: true);
+      await f.writeAsString(encoded);
+    }
+  }
+
+  /// Migration: when the embedding model changes, stored vectors (old model /
+  /// old dimensionality) are meaningless — regenerate them all from the text.
+  /// Cheap: a few hundred facts at most, done once per model switch.
+  Future<void> reembedAll(int expectedDims) async {
+    final stale = facts.any((x) => x.embedding.length != expectedDims);
+    if (!stale) return;
+    final vecs = await embedder.embedBatch([for (final x in facts) x.text]);
+    for (var i = 0; i < facts.length; i++) {
+      facts[i].embedding = vecs[i];
+    }
+    await _save();
   }
 
   Future<int> add(String text, String category, {String source = ''}) async {

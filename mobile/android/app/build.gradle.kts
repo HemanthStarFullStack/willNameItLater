@@ -4,6 +4,15 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Release signing lives outside the repo: android/key.properties (gitignored)
+// points at the keystore under ~/.keys. Builds fall back to the debug key
+// when the file is absent (e.g. CI without secrets).
+import java.util.Properties
+val keyProps = Properties().apply {
+    val f = rootProject.file("key.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
 android {
     namespace = "com.example.ondevice_ai"
     compileSdk = flutter.compileSdkVersion
@@ -15,20 +24,31 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.ondevice_ai"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
+        applicationId = "in.hemanthify.ondeviceai"
         minSdk = 28 // lib_llama_cpp_android requires 28 (Android 9+)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (keyProps.isNotEmpty()) {
+            create("release") {
+                storeFile = file(keyProps.getProperty("storeFile"))
+                storePassword = keyProps.getProperty("storePassword")
+                keyAlias = keyProps.getProperty("keyAlias")
+                keyPassword = keyProps.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // Signing with the debug key so the APK installs without a keystore.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (keyProps.isNotEmpty()) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
             // R8 shrinks classes.dex ~9 MB -> ~3 MB; JNI-reached classes and
             // compile-time-only annotations are handled in proguard-rules.pro.
             isMinifyEnabled = true
@@ -59,11 +79,4 @@ kotlin {
 
 flutter {
     source = "../.."
-}
-
-// fonnx pulls onnxruntime-extensions (custom ops for exotic models) but only
-// touches it behind an isOrtExtensionsEnabled flag that MiniLM never sets —
-// ~6 MB of native libs we never load. Excluded to fit delivery size limits.
-configurations.all {
-    exclude(group = "com.microsoft.onnxruntime", module = "onnxruntime-extensions-android")
 }

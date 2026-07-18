@@ -82,6 +82,19 @@ final class LlamaToolCallResponse extends LlamaResponse {
   String toString() => 'LlamaToolCallResponse(toolCall: $toolCall)';
 }
 
+/// Vendored addition: pooled, L2-normalised embeddings for a batch of texts —
+/// the reply to [LlamaEmbedCommand]. One vector per input text, in order.
+final class LlamaEmbedResponse extends LlamaResponse {
+  const LlamaEmbedResponse({required this.embeddings});
+
+  final List<List<double>> embeddings;
+
+  @override
+  String toString() =>
+      'LlamaEmbedResponse(${embeddings.length} vectors of '
+      '${embeddings.isEmpty ? 0 : embeddings.first.length} dims)';
+}
+
 final class LlamaErrorResponse extends LlamaResponse {
   const LlamaErrorResponse({required this.message});
 

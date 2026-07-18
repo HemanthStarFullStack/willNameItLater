@@ -216,7 +216,8 @@ final class LlamaResponsesResource {
           );
         case LlamaReadyResponse() ||
             LlamaStateChangedResponse() ||
-            LlamaDoneResponse():
+            LlamaDoneResponse() ||
+            LlamaEmbedResponse():
           break;
       }
     }
@@ -324,7 +325,8 @@ final class LlamaResponsesResource {
             return;
           case LlamaReadyResponse() ||
               LlamaStateChangedResponse() ||
-              LlamaDoneResponse():
+              LlamaDoneResponse() ||
+              LlamaEmbedResponse():
             break;
         }
       }

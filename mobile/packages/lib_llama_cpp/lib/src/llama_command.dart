@@ -171,6 +171,7 @@ final class LlamaGenerateMessagesCommand extends LlamaCommand {
     this.tools = const [],
     this.toolChoice = LlamaToolChoice.auto,
     this.parallelToolCalls = false,
+    this.enableThinking,
   });
 
   final List<LlamaMessage> messages;
@@ -182,7 +183,25 @@ final class LlamaGenerateMessagesCommand extends LlamaCommand {
   final LlamaToolChoice toolChoice;
   final bool parallelToolCalls;
 
+  /// Vendored addition: forwarded to the chat template as
+  /// `chat_template_kwargs.enable_thinking` — turns hybrid reasoners'
+  /// <think> blocks off (false) or on (true); null leaves the model default.
+  final bool? enableThinking;
+
   bool get hasMedia => messages.any((message) => message.hasMedia);
+}
+
+/// Vendored addition: compute pooled embeddings for [texts] with the loaded
+/// model (use an embedding GGUF such as EmbeddingGemma or Qwen3-Embedding —
+/// their metadata carries the pooling type). Replies with one
+/// [LlamaEmbedResponse] followed by [LlamaDoneResponse].
+final class LlamaEmbedCommand extends LlamaCommand {
+  const LlamaEmbedCommand({required this.texts});
+
+  final List<String> texts;
+
+  @override
+  String toString() => 'LlamaEmbedCommand(${texts.length} texts)';
 }
 
 final class LlamaDisposeCommand extends LlamaCommand {

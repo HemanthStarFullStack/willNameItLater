@@ -189,8 +189,30 @@ final class NativeLlamaRuntime {
       model: loaded.model,
       request: _chatTemplateRequest(command, mediaInputs),
     );
+    // Vendored addition: enableThinking=false prefills a closed, empty think
+    // block after the generation prompt — the same mechanism llama-server
+    // uses for --reasoning-budget 0. Robust even when the model's template
+    // ignores chat_template_kwargs (Qwen3.5 does).
+    var prompt = templateResult.prompt;
+    // The chat-output parser must see the same tail as the real prompt —
+    // otherwise it believes a <think> block is still open and re-wraps the
+    // whole answer as reasoning.
+    var generationPrompt = templateResult.generationPrompt;
+    if (command.enableThinking == false) {
+      final tail = prompt.trimRight();
+      if (tail.endsWith('<think>')) {
+        // Template force-opens a think block (Qwen3.5 style) — close it
+        // immediately so the model answers directly.
+        prompt = '$prompt</think>\n\n';
+        generationPrompt = '$generationPrompt</think>\n\n';
+      } else if (!tail.endsWith('</think>')) {
+        // Template leaves thinking optional — prefill a closed empty block.
+        prompt = '$prompt<think>\n\n</think>\n\n';
+        generationPrompt = '$generationPrompt<think>\n\n</think>\n\n';
+      }
+    }
     final samplingCommand = LlamaGenerateCommand(
-      prompt: templateResult.prompt,
+      prompt: prompt,
       maxTokens: command.maxTokens,
       temperature: command.temperature,
       topP: command.topP,
@@ -199,9 +221,21 @@ final class NativeLlamaRuntime {
 
     final initialTokenCount = _evaluateMessagePrompt(
       loaded: loaded,
-      prompt: templateResult.prompt,
+      prompt: prompt,
       mediaInputs: mediaInputs,
     );
+
+    // With thinking disabled, also ban the <think> token itself: RL-trained
+    // thinkers re-open a block even after a prefilled empty one.
+    var banned = const <int>[];
+    if (command.enableThinking == false) {
+      // '<think>' must map to one special token (a possible BOS prefix from
+      // the tokenizer is dropped); multi-token splits are left unbanned.
+      final thinkTokens = _tokenize(loaded.vocab, '<think>')
+          .where((t) => t != _bindings.llama_vocab_bos(loaded.vocab))
+          .toList();
+      if (thinkTokens.length == 1) banned = thinkTokens;
+    }
 
     final grammar = _samplingGrammarFor(templateResult);
     yield* streamToolAwareMessageResponses(
@@ -214,12 +248,13 @@ final class NativeLlamaRuntime {
         grammarTriggers: grammar == null
             ? const []
             : templateResult.grammarTriggers,
+        bannedTokens: banned,
       ),
       command: command,
       parseChatOutput: (text, {required isPartial}) => _wrapper.parseChatOutput(
         text: text,
         format: templateResult.format,
-        generationPrompt: templateResult.generationPrompt,
+        generationPrompt: generationPrompt,
         parser: templateResult.parser,
         isPartial: isPartial,
       ),
@@ -249,6 +284,7 @@ final class NativeLlamaRuntime {
     String? grammar,
     bool grammarLazy = false,
     List<_GrammarTrigger> grammarTriggers = const [],
+    List<int> bannedTokens = const [],
   }) sync* {
     final contextSize = _bindings.llama_n_ctx(loaded.context);
     final maxTokens = command.maxTokens ?? contextSize - initialTokenCount;
@@ -262,6 +298,7 @@ final class NativeLlamaRuntime {
       grammar: grammar,
       grammarLazy: grammarLazy,
       grammarTriggers: grammarTriggers,
+      bannedTokens: bannedTokens,
     );
     final stopMatcher = _StopMatcher(command.stop);
     var generated = 0;
@@ -401,6 +438,10 @@ final class NativeLlamaRuntime {
       'parallel_tool_calls': command.parallelToolCalls,
       'add_generation_prompt': true,
       'use_jinja': true,
+      // Vendored addition: same key llama-server accepts for hybrid
+      // reasoners (Qwen3/3.5) — jinja templates read enable_thinking.
+      if (command.enableThinking != null)
+        'chat_template_kwargs': {'enable_thinking': command.enableThinking},
     };
   }
 
@@ -578,12 +619,94 @@ final class NativeLlamaRuntime {
     }
   }
 
+  // PATCHED (vendored): pooled embeddings via the loaded model. Enables one
+  // llama.cpp engine to serve both chat and retrieval — no second runtime.
+  LlamaEmbedResponse embed(LlamaEmbedCommand command) {
+    final loaded = _loaded;
+    if (loaded == null) {
+      throw const NativeLlamaException('Cannot embed before a model is loaded.');
+    }
+    final ctx = loaded.context;
+    final nEmbd = _bindings.llama_model_n_embd(loaded.model);
+    final nBatch = _bindings.llama_n_batch(ctx);
+    final mem = _bindings.llama_get_memory(ctx);
+    final out = <List<double>>[];
+
+    _bindings.llama_set_embeddings(ctx, true);
+    try {
+      for (final text in command.texts) {
+        var tokens = _tokenize(loaded.vocab, text);
+        if (tokens.isEmpty) {
+          out.add(List<double>.filled(nEmbd, 0));
+          continue;
+        }
+        // Pooled embeddings need the whole sequence in one batch.
+        if (tokens.length > nBatch) {
+          tokens = tokens.sublist(0, nBatch);
+        }
+
+        _bindings.llama_memory_clear(mem, true);
+        final batch = _bindings.llama_batch_init(tokens.length, 0, 1);
+        try {
+          batch.n_tokens = tokens.length;
+          for (var i = 0; i < tokens.length; i += 1) {
+            batch.token[i] = tokens[i];
+            batch.pos[i] = i;
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i][0] = 0;
+            batch.logits[i] = 1;
+          }
+          final rc = _bindings.llama_decode(ctx, batch);
+          if (rc != 0) {
+            throw NativeLlamaException(
+              'llama_decode failed with code $rc during embedding.',
+            );
+          }
+
+          // Pooled per-sequence vector (model metadata sets the pooling type);
+          // fall back to the last token's embedding for pooling-less models.
+          var p = _bindings.llama_get_embeddings_seq(ctx, 0);
+          p = p == nullptr
+              ? _bindings.llama_get_embeddings_ith(ctx, tokens.length - 1)
+              : p;
+          if (p == nullptr) {
+            throw const NativeLlamaException(
+              'Model returned no embeddings — not an embedding-capable GGUF?',
+            );
+          }
+
+          final v = List<double>.generate(nEmbd, (i) => p[i]);
+          var norm = 0.0;
+          for (final x in v) {
+            norm += x * x;
+          }
+          norm = math.sqrt(norm);
+          if (norm > 0) {
+            for (var i = 0; i < v.length; i += 1) {
+              v[i] /= norm;
+            }
+          }
+          out.add(v);
+        } finally {
+          _bindings.llama_batch_free(batch);
+        }
+      }
+    } finally {
+      // Leave the context ready for normal generation use.
+      _bindings.llama_memory_clear(mem, true);
+      _bindings.llama_set_embeddings(ctx, false);
+    }
+
+    return LlamaEmbedResponse(embeddings: out);
+  }
+
   Pointer<llama_sampler> _createSampler(
     Pointer<llama_vocab> vocab,
     LlamaGenerateCommand command, {
     String? grammar,
     bool grammarLazy = false,
     List<_GrammarTrigger> grammarTriggers = const [],
+    List<int> bannedTokens = const [],
   }) {
     final sampler = _bindings.llama_sampler_chain_init(
       _bindings.llama_sampler_chain_default_params(),
@@ -598,6 +721,28 @@ final class NativeLlamaRuntime {
         throw NativeLlamaException('Failed to create llama.cpp $name sampler.');
       }
       _bindings.llama_sampler_chain_add(sampler, child);
+    }
+
+    // Vendored addition: hard-ban tokens (e.g. <think> when thinking is
+    // disabled) — a -inf logit bias means they can never be sampled.
+    if (bannedTokens.isNotEmpty) {
+      final biases = calloc<llama_logit_bias>(bannedTokens.length);
+      try {
+        for (var i = 0; i < bannedTokens.length; i += 1) {
+          biases[i].token = bannedTokens[i];
+          biases[i].bias = double.negativeInfinity;
+        }
+        add(
+          _bindings.llama_sampler_init_logit_bias(
+            _bindings.llama_vocab_n_tokens(vocab),
+            bannedTokens.length,
+            biases,
+          ),
+          'logit bias',
+        );
+      } finally {
+        calloc.free(biases);
+      }
     }
 
     if (grammar != null && grammar.isNotEmpty && grammarLazy) {

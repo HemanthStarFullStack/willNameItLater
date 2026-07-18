@@ -11,6 +11,7 @@ import 'brain/llm.dart';
 import 'brain/pipeline.dart';
 import 'brain/router.dart' as brain;
 import 'brain/store.dart';
+import 'brain/vault.dart';
 
 /// One on-device model. `minRamGB` = the device RAM floor to run it at all;
 /// `quality` is a hand-curated 0–100 benchmark proxy used to rank models that
@@ -29,40 +30,39 @@ class Model {
 }
 
 const _catalog = <Model>[
-  Model('Qwen3 0.6B', 'Qwen3', 0.6, 0.5, 0, 44, 2025,
-      'Qwen3-0.6B-Q4_K_M.gguf',
-      'https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q4_K_M.gguf',
+  // July-2026 generation. Every entry is gated on the desktop harness
+  // (test/harness/chat_smoke_test.dart) before shipping: load + coherent
+  // generation on the exact llama.cpp pin the app bundles.
+  Model('Qwen3.5 0.8B', 'Qwen3.5', 0.8, 0.51, 0, 55, 2026,
+      'Qwen3.5-0.8B-Q4_K_M.gguf',
+      'https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_K_M.gguf',
       thinks: true),
   Model('Gemma 3 1B', 'Gemma', 1.0, 0.8, 2.5, 52, 2025,
       'gemma-3-1b-it-Q4_K_M.gguf',
       'https://huggingface.co/ggml-org/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_K_M.gguf'),
-  Model('DeepSeek R1 1.5B', 'DeepSeek', 1.5, 1.1, 3.0, 58, 2025,
-      'DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf',
-      'https://huggingface.co/unsloth/DeepSeek-R1-Distill-Qwen-1.5B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf',
+  Model('Qwen3.5 2B', 'Qwen3.5', 2.0, 1.28, 3.0, 70, 2026,
+      'Qwen3.5-2B-Q4_K_M.gguf',
+      'https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf',
       thinks: true),
-  Model('Qwen3 1.7B', 'Qwen3', 1.7, 1.3, 3.0, 63, 2025,
-      'Qwen3-1.7B-Q4_K_M.gguf',
-      'https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_K_M.gguf',
+  Model('Qwen3.5 4B', 'Qwen3.5', 4.0, 2.74, 6.0, 80, 2026,
+      'Qwen3.5-4B-Q4_K_M.gguf',
+      'https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf',
       thinks: true),
-  Model('SmolLM3 3B', 'SmolLM3', 3.0, 1.9, 5.0, 72, 2025,
-      'SmolLM3-3B-Q4_K_M.gguf',
-      'https://huggingface.co/unsloth/SmolLM3-3B-GGUF/resolve/main/SmolLM3-3B-Q4_K_M.gguf'),
-  Model('Gemma 3 4B', 'Gemma', 4.0, 2.5, 6.0, 79, 2025,
-      'gemma-3-4b-it-Q4_K_M.gguf',
-      'https://huggingface.co/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf'),
-  Model('Phi-4 mini', 'Phi', 3.8, 2.5, 6.0, 80, 2025,
-      'Phi-4-mini-instruct-Q4_K_M.gguf',
-      'https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF/resolve/main/Phi-4-mini-instruct-Q4_K_M.gguf'),
-  Model('Qwen3 4B (2507)', 'Qwen3', 4.0, 2.5, 6.0, 84, 2025,
-      'Qwen3-4B-Instruct-2507-Q4_K_M.gguf',
-      'https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf'),
+  // "E2B" = 2B effective; llama.cpp holds the full ~5B weights, so RAM floor
+  // and speed tier are set from the real size, not the marketing name.
+  Model('Gemma 4 E2B', 'Gemma4', 5.4, 3.11, 7.0, 76, 2026,
+      'gemma-4-E2B-it-Q4_K_M.gguf',
+      'https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf'),
 ];
 
-/// The on-device embedder (MiniLM-L6-v2 ONNX) — powers hybrid retrieval and
-/// bucket routing. Ships in the fonnx repo; one-time ~20 MB download.
+/// The on-device embedder — EmbeddingGemma-300M (Google, 2025; QAT Q8_0 GGUF,
+/// ungated ggml-org mirror) through the same llama.cpp engine as chat.
+/// Harness-verified 2026-07-17: 7/7 top-1 on seed-fact retrieval, on-topic
+/// cosine ≥0.61 vs off-topic ≤0.50. One-time ~330 MB download, 768-dim.
 const _embedderUrl =
-    'https://github.com/Telosnex/fonnx/raw/main/example/assets/models/miniLmL6V2/miniLmL6V2.onnx';
-const _embedderFile = 'miniLmL6V2.onnx';
+    'https://huggingface.co/ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/resolve/main/embeddinggemma-300m-qat-Q8_0.gguf';
+const _embedderFile = 'embeddinggemma-300m-qat-Q8_0.gguf';
+const _embedderDims = 768;
 
 int _fit(Model m, double ramGB) =>
     ramGB >= m.minRamGB * 1.4 ? 2 : (ramGB >= m.minRamGB ? 1 : 0);
@@ -163,6 +163,7 @@ class _HomeState extends State<Home> {
   bool _generating = false;
   String _liveStep = '';
   late String _dataDir;
+  Vault? _vault;
 
   @override
   void initState() {
@@ -197,7 +198,7 @@ class _HomeState extends State<Home> {
       if (!File(ePath).existsSync()) {
         setState(() {
           _progress = 0;
-          _status = 'Downloading memory engine (~20 MB)…';
+          _status = 'Downloading memory engine (~330 MB)…';
         });
         await Dio().download(_embedderUrl, '$ePath.part',
             onReceiveProgress: (r, t) {
@@ -228,13 +229,19 @@ class _HomeState extends State<Home> {
   }
 
   Future<void> _boot(Model m) async {
-    _embedder.load(await _path(_embedderFile));
+    await _embedder.load(await _path(_embedderFile));
     await _llm.load(await _path(m.file));
-    _llm.noThinkSuffix =
-        (m.family == 'Qwen3' && m.thinks) ? ' /no_think' : '';
+    // Hybrid reasoners burn their whole token budget thinking on phone CPU —
+    // disable at the template/sampler level (harness-verified for Qwen3.5).
+    _llm.enableThinking = m.thinks ? false : null;
 
-    final store = MemoryStore(_embedder, await _path('memories.json'));
+    _vault = await Vault.open();
+    final store = MemoryStore(_embedder, await _path('memories.json'),
+        vault: _vault);
     await store.load();
+    // Embedder changed (MiniLM 384-dim -> EmbeddingGemma 768-dim): stale
+    // vectors are regenerated from their text once, transparently.
+    await store.reembedAll(_embedderDims);
     if (store.facts.isEmpty) {
       for (final (text, cat) in _samples) {
         await store.add(text, cat);
@@ -249,11 +256,12 @@ class _HomeState extends State<Home> {
           }
         });
 
-    // Restore chat history (last 200 messages survive restarts).
+    // Restore chat history (last 200 messages survive restarts; encrypted,
+    // legacy plaintext files migrate on next save).
     try {
-      final f = File(await _path('chats.json'));
-      if (f.existsSync()) {
-        final raw = json.decode(await f.readAsString()) as List;
+      final text = await _vault!.readString(File(await _path('chats.json')));
+      if (text != null) {
+        final raw = json.decode(text) as List;
         _messages.addAll(
             raw.map((e) => Msg.fromJson(e as Map<String, dynamic>)));
       }
@@ -268,11 +276,13 @@ class _HomeState extends State<Home> {
   }
 
   Future<void> _saveChats() async {
+    final vault = _vault;
+    if (vault == null) return;
     final tail = _messages.length <= 200
         ? _messages
         : _messages.sublist(_messages.length - 200);
-    await File(await _path('chats.json'))
-        .writeAsString(json.encode([for (final m in tail) m.toJson()]));
+    await vault.writeString(File(await _path('chats.json')),
+        json.encode([for (final m in tail) m.toJson()]));
   }
 
   Future<void> _send() async {

@@ -204,6 +204,10 @@ void _runInferenceWorker(_StartMessage start) {
             for (final response in runtime.generate(command)) {
               send(message.requestId, response);
             }
+            // Vendored fix: signal end-of-generation explicitly. The stock
+            // package only closed the per-request envelope stream, which a
+            // persistent multi-command session cannot observe.
+            send(message.requestId, const LlamaDoneResponse());
           } on NativeLlamaException catch (error) {
             send(message.requestId, LlamaErrorResponse(message: error.message));
           } on Object catch (error) {
@@ -226,12 +230,35 @@ void _runInferenceWorker(_StartMessage start) {
             for (final response in runtime.generateMessages(command)) {
               send(message.requestId, response);
             }
+            // Vendored fix: explicit end-of-generation (see generate case).
+            send(message.requestId, const LlamaDoneResponse());
           } on NativeLlamaException catch (error) {
             send(message.requestId, LlamaErrorResponse(message: error.message));
           } on Object catch (error) {
             send(
               message.requestId,
               LlamaErrorResponse(message: 'Generation failed: $error'),
+            );
+          }
+        }
+      case LlamaEmbedCommand():
+        if (!state.isModelLoaded || runtime == null) {
+          send(
+            message.requestId,
+            const LlamaErrorResponse(
+              message: 'Cannot embed before a model is loaded.',
+            ),
+          );
+        } else {
+          try {
+            send(message.requestId, runtime.embed(command));
+            send(message.requestId, const LlamaDoneResponse());
+          } on NativeLlamaException catch (error) {
+            send(message.requestId, LlamaErrorResponse(message: error.message));
+          } on Object catch (error) {
+            send(
+              message.requestId,
+              LlamaErrorResponse(message: 'Embedding failed: $error'),
             );
           }
         }

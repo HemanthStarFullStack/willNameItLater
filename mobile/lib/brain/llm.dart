@@ -20,11 +20,22 @@ String stripThink(String raw) {
   var s = raw.replaceAll(RegExp(r'<think>[\s\S]*?</think>'), '').trim();
   final open = s.indexOf('<think>');
   if (open >= 0) s = s.substring(0, open).trim();
-  if (s.isEmpty && raw.contains('<think>')) return '💭 thinking…';
+  // Template-forced thinkers (Qwen3.5): <think> is opened in the PROMPT, so
+  // the output carries only the closing tag — keep what follows it.
+  final close = s.lastIndexOf('</think>');
+  if (close >= 0) s = s.substring(close + '</think>'.length).trim();
+  if (s.isEmpty && raw.contains('think>')) return '💭 thinking…';
   return s;
 }
 
 class Llm {
+  /// Explicit native library path. Unused on Android (the plugin resolves its
+  /// bundled .so); the desktop test harness points this at the Windows CPU
+  /// DLL so the full brain runs on the laptop.
+  final String? libraryPath;
+
+  Llm({this.libraryPath});
+
   final _commands = StreamController<LlamaCommand>();
   StreamSubscription<LlamaResponse>? _sub;
 
@@ -34,16 +45,29 @@ class Llm {
   final _buf = StringBuffer();
   void Function(String partial)? _onPartial;
 
-  /// Appended to system prompts for Qwen3-style hybrid thinkers (documented
-  /// soft switch). R1-style models can't be switched off; stripThink handles
-  /// their output instead.
-  String noThinkSuffix = '';
+  /// Template/sampler-level thinking control. Qwen3.5-era hybrid reasoners
+  /// ignore the old /no_think text switch, so the vendored engine closes the
+  /// template's think block and bans the <think> token instead.
+  /// null = model default; false = never think (right for a phone pipeline).
+  bool? enableThinking;
 
   bool get ready => _sub != null;
 
+  /// Loads the model and completes only once the engine confirms it (or
+  /// errors). Without this, a load-time failure arrived before any chat was
+  /// pending and was silently dropped — the next chat() then hung forever.
   Future<void> load(String modelPath, {int contextSize = 4096}) async {
     await _sub?.cancel();
-    _sub = const LibLlamaCpp().transform(_commands.stream).listen((r) {
+    final lib = libraryPath;
+    final loaded = Completer<void>();
+    _sub = const LibLlamaCpp()
+        .transform(
+      _commands.stream,
+      libraryRequest: lib == null
+          ? const LlamaCppLibraryRequest()
+          : LlamaCppLibraryRequest(preferredPath: lib),
+    )
+        .listen((r) {
       switch (r) {
         case LlamaTokenResponse(:final text):
           _buf.write(text);
@@ -52,17 +76,23 @@ class Llm {
           _turn?.complete(_buf.toString());
           _turn = null;
         case LlamaErrorResponse(:final message):
+          if (!loaded.isCompleted) {
+            loaded.completeError(StateError(message));
+          }
           _turn?.completeError(StateError(message));
           _turn = null;
+        case LlamaStateChangedResponse(:final state):
+          if (state.isModelLoaded && !loaded.isCompleted) loaded.complete();
         case LlamaReadyResponse() ||
-              LlamaStateChangedResponse() ||
-              LlamaToolCallResponse():
+              LlamaToolCallResponse() ||
+              LlamaEmbedResponse():
           break;
       }
     });
     _commands.add(
       LlamaLoadModelCommand(modelPath: modelPath, contextSize: contextSize),
     );
+    await loaded.future;
   }
 
   /// One chat call. `onPartial` streams the visible (think-stripped) text —
@@ -81,13 +111,13 @@ class Llm {
       _turn = done;
       _commands.add(LlamaGenerateMessagesCommand(
         messages: [
-          if (system != null)
-            LlamaMessage(role: 'system', content: '$system$noThinkSuffix'),
+          if (system != null) LlamaMessage(role: 'system', content: system),
           LlamaMessage(role: 'user', content: prompt),
         ],
         temperature: temperature,
         topP: 0.9,
         maxTokens: maxTokens,
+        enableThinking: enableThinking,
       ));
       final raw = await done.future;
       _onPartial = null;

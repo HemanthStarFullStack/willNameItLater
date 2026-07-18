@@ -11,16 +11,14 @@ dependencies:
     sdk: flutter
   # llama.cpp (GGUF) on-device inference — open models, no HuggingFace token.
   lib_llama_cpp: ^0.7.3
-  # On-device ONNX text embeddings (replaces nomic-embed/Ollama) — powers the
-  # vector half of hybrid retrieval + centroid routing. MiniLM-L6-v2 via
-  # bundled ONNX Runtime, built-in WordPiece tokenizer, no Rust toolchain.
-  fonnx:
-    git:
-      url: https://github.com/Telosnex/fonnx.git
   dio: ^5.7.0                # model download with progress
   path_provider: ^2.1.5     # where to store the downloaded .gguf
   shared_preferences: ^2.5.5
   system_info_plus: ^0.0.6
+  # Memories/chats are encrypted at rest: AES-GCM via `cryptography`, key
+  # held in the platform keystore via flutter_secure_storage.
+  cryptography: ^2.7.0
+  flutter_secure_storage: ^9.2.2
 
 # Vendored copy of lib_llama_cpp 0.7.3 with a streaming UTF-8 fix: characters
 # split across token boundaries crashed generation with "Unfinished UTF-8
@@ -33,6 +31,11 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  # Desktop test harness: run the same llama.cpp pin on the Windows host so
+  # models/embedders/pipeline are testable without a phone (the x86_64
+  # emulator cannot run the arm64-only GGUF sessions).
+  lib_llama_cpp_windows: ^0.7.3
+  lib_llama_cpp_platform_interface: ^0.7.3
 
 flutter:
   uses-material-design: true

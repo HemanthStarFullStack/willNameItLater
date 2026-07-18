@@ -43,3 +43,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Harness model files (multi-GB GGUFs) — fetched via test/harness/fetch_models.dart
+test/harness/models/

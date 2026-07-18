@@ -1,4 +1,8 @@
 export 'src/lib_llama_cpp.dart';
+// Vendored addition: expose library resolution types so apps/tests can pass
+// an explicit native library path (desktop harness).
+export 'package:lib_llama_cpp_platform_interface/lib_llama_cpp_platform_interface.dart'
+    show LlamaCppLibraryRequest, LlamaCppLibraryCapability;
 export 'src/llama_content.dart';
 export 'src/llama_command.dart';
 export 'src/llama_response.dart';
