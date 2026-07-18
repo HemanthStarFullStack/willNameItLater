@@ -6,9 +6,11 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:system_info_plus/system_info_plus.dart';
 
+import 'brain/agent.dart';
 import 'brain/embedder.dart';
 import 'brain/llm.dart';
 import 'brain/pipeline.dart';
+import 'brain/reminders.dart';
 import 'brain/router.dart' as brain;
 import 'brain/store.dart';
 import 'brain/vault.dart';
@@ -63,6 +65,12 @@ const _embedderUrl =
     'https://huggingface.co/ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/resolve/main/embeddinggemma-300m-qat-Q8_0.gguf';
 const _embedderFile = 'embeddinggemma-300m-qat-Q8_0.gguf';
 const _embedderDims = 768;
+
+// FunctionGemma-270M — the agentic tool router (reminders & future tools).
+// Optional: if the download ever fails, the classic pipeline still works.
+const _routerUrl =
+    'https://huggingface.co/ggml-org/functiongemma-270m-it-GGUF/resolve/main/functiongemma-270m-it-q8_0.gguf';
+const _routerFile = 'functiongemma-270m-it-Q8_0.gguf';
 
 int _fit(Model m, double ramGB) =>
     ramGB >= m.minRamGB * 1.4 ? 2 : (ramGB >= m.minRamGB ? 1 : 0);
@@ -219,6 +227,21 @@ class _HomeState extends State<Home> {
         });
         await File('$gPath.part').rename(gPath);
       }
+      // Tool router (small, optional — a failure here never blocks the app).
+      final rPath = await _path(_routerFile);
+      if (!File(rPath).existsSync()) {
+        try {
+          setState(() {
+            _progress = 0;
+            _status = 'Downloading task router (~280 MB)…';
+          });
+          await Dio().download(_routerUrl, '$rPath.part',
+              onReceiveProgress: (r, t) {
+            if (t > 0) setState(() => _progress = r / t);
+          });
+          await File('$rPath.part').rename(rPath);
+        } catch (_) {}
+      }
       setState(() => _status = 'Preparing your memories…');
       await _boot(m);
     } catch (e) {
@@ -247,8 +270,27 @@ class _HomeState extends State<Home> {
         await store.add(text, cat);
       }
     }
+    // Agentic layer: FunctionGemma router + reminders. Loaded only when its
+    // model is present — everything else works without it.
+    ToolRouter? agent;
+    ReminderStore? reminders;
+    final rPath = await _path(_routerFile);
+    if (File(rPath).existsSync()) {
+      try {
+        agent = ToolRouter();
+        await agent.load(rPath);
+        reminders =
+            ReminderStore(await _path('reminders.json'), vault: _vault);
+        await reminders.load();
+      } catch (_) {
+        agent = null;
+        reminders = null;
+      }
+    }
+
     final router = brain.Router(_llm, _embedder, store);
-    final pipeline = Pipeline(_llm, router, store);
+    final pipeline =
+        Pipeline(_llm, router, store, agent: agent, reminders: reminders);
     pipeline.onStep = (s) => setState(() => _liveStep = s);
     pipeline.onPartial = (partial) => setState(() {
           if (_messages.isNotEmpty && _messages.last.role == 'assistant') {

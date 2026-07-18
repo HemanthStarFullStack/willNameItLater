@@ -11,7 +11,9 @@
 /// Upgrade path: an ONNX NLI model via fonnx.
 library;
 
+import 'agent.dart';
 import 'llm.dart';
+import 'reminders.dart';
 import 'router.dart';
 import 'store.dart';
 import 'web.dart';
@@ -171,13 +173,19 @@ class Pipeline {
   final Router router;
   final MemoryStore store;
 
+  /// Agentic layer (FunctionGemma). Handles capabilities the classic pipeline
+  /// has no path for — reminders first, future tools next. Both optional:
+  /// the pipeline runs fine without them (harness tests, low-RAM devices).
+  final ToolRouter? agent;
+  final ReminderStore? reminders;
+
   /// Live progress line for the UI ("routed to Work memories"…).
   void Function(String step)? onStep;
 
   /// Streams the visible text of the final user-facing answer call.
   void Function(String partial)? onPartial;
 
-  Pipeline(this.llm, this.router, this.store);
+  Pipeline(this.llm, this.router, this.store, {this.agent, this.reminders});
 
   // --- ingest (Add-memory tab) ----------------------------------------------
 
@@ -606,9 +614,33 @@ class Pipeline {
     if (message.isEmpty) return const ChatReply('Ask me something.', '', []);
 
     final steps = <String>[];
+
+    // Deterministic guards first: forget-shaped messages must never reach the
+    // agent (measured: FunctionGemma false-fires list_reminders on them).
     final forgot = await _maybeForget(message, steps);
     if (forgot != null) {
       return ChatReply(forgot, '🗑️ memory', steps);
+    }
+
+    // Agentic tools — capabilities the classic pipeline can't serve.
+    // Everything else falls through to the proven deterministic paths below
+    // (promoting FunctionGemma to full router is a later, gated step).
+    if (agent != null && reminders != null) {
+      final call = await agent!.route(message);
+      if (call != null) _step(steps, '🤖 router → $call');
+      switch (call?.name) {
+        case 'set_reminder':
+          final text = call!.args['text']?.trim();
+          final line = await reminders!.add(
+              (text == null || text.isEmpty) ? message : text,
+              call.args['time'] ?? '',
+              // The 270M compresses relative times lossily ("tomorrow at
+              // 8am" -> "24h") — the raw message parses better.
+              fallbackWhen: message);
+          return ChatReply(line, '⏰ reminder', steps);
+        case 'list_reminders':
+          return ChatReply(reminders!.listText(), '⏰ reminders', steps);
+      }
     }
 
     // Pure greetings carry no data intent — answer instantly instead of

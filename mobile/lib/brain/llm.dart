@@ -43,6 +43,7 @@ class Llm {
   Future<void> _busy = Future.value();
   Completer<String>? _turn;
   final _buf = StringBuffer();
+  final _toolCalls = <LlamaToolCall>[];
   void Function(String partial)? _onPartial;
 
   /// Template/sampler-level thinking control. Qwen3.5-era hybrid reasoners
@@ -83,9 +84,9 @@ class Llm {
           _turn = null;
         case LlamaStateChangedResponse(:final state):
           if (state.isModelLoaded && !loaded.isCompleted) loaded.complete();
-        case LlamaReadyResponse() ||
-              LlamaToolCallResponse() ||
-              LlamaEmbedResponse():
+        case LlamaToolCallResponse(:final toolCall):
+          _toolCalls.add(toolCall);
+        case LlamaReadyResponse() || LlamaEmbedResponse():
           break;
       }
     });
@@ -124,6 +125,40 @@ class Llm {
       return stripThink(raw).trim();
     });
     // Keep the queue alive even when a call fails.
+    _busy = run.then((_) {}, onError: (_) {});
+    return run;
+  }
+
+  /// One call with native tool definitions — the chat template declares the
+  /// tools in the model's trained format. Returns the raw text AND any calls
+  /// the engine parser recognized (this pin predates FunctionGemma's syntax,
+  /// so the caller usually parses the raw text itself).
+  Future<(String, List<LlamaToolCall>)> chatWithTools(
+    String prompt, {
+    required List<LlamaTool> tools,
+    String? system,
+    double temperature = 0,
+    int maxTokens = 128,
+    List<String> stop = const [],
+  }) {
+    final run = _busy.then((_) async {
+      _buf.clear();
+      _toolCalls.clear();
+      final done = Completer<String>();
+      _turn = done;
+      _commands.add(LlamaGenerateMessagesCommand(
+        messages: [
+          if (system != null) LlamaMessage(role: 'system', content: system),
+          LlamaMessage(role: 'user', content: prompt),
+        ],
+        tools: tools,
+        temperature: temperature,
+        maxTokens: maxTokens,
+        stop: stop,
+      ));
+      final raw = await done.future;
+      return (raw, List<LlamaToolCall>.unmodifiable(_toolCalls));
+    });
     _busy = run.then((_) {}, onError: (_) {});
     return run;
   }

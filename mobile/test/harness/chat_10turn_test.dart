@@ -7,9 +7,11 @@ library;
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:ondevice_ai/brain/agent.dart';
 import 'package:ondevice_ai/brain/embedder.dart';
 import 'package:ondevice_ai/brain/llm.dart';
 import 'package:ondevice_ai/brain/pipeline.dart';
+import 'package:ondevice_ai/brain/reminders.dart';
 import 'package:ondevice_ai/brain/router.dart' as brain;
 import 'package:ondevice_ai/brain/store.dart';
 
@@ -28,7 +30,7 @@ const _seeds = [
 void main() {
   setUpAll(registerWindowsPlatform);
 
-  test('13-turn conversation uses every tool accurately', () async {
+  test('15-turn conversation uses every tool accurately', () async {
     final dir = Directory.systemTemp.createTempSync('brain_10turn');
     addTearDown(() => dir.deleteSync(recursive: true));
 
@@ -36,12 +38,17 @@ void main() {
     await embedder.load(modelPath('embeddinggemma-300m-qat-Q8_0.gguf'));
     final llm = Llm(libraryPath: windowsDll)..enableThinking = false;
     await llm.load(modelPath('Qwen3.5-2B-Q4_K_M.gguf'));
+    final agent = ToolRouter(libraryPath: windowsDll);
+    await agent.load(modelPath('functiongemma-270m-it-Q8_0.gguf'));
+    final reminders =
+        ReminderStore('${dir.path}/reminders.json', notify: false);
 
     final store = MemoryStore(embedder, '${dir.path}/memories.json');
     for (final (text, cat) in _seeds) {
       await store.add(text, cat);
     }
-    final pipeline = Pipeline(llm, brain.Router(llm, embedder, store), store);
+    final pipeline = Pipeline(llm, brain.Router(llm, embedder, store), store,
+        agent: agent, reminders: reminders);
 
     final history = <({String role, String content})>[];
     var n = 0;
@@ -114,7 +121,19 @@ void main() {
     r = await turn('What is the capital of France?');
     expect(r.answer, contains('Paris'));
 
+    // 14-15: agentic tools (FunctionGemma) — set a reminder, list it.
+    r = await turn('remind me to renew my insurance tomorrow at 10am');
+    expect(r.footer, contains('⏰'));
+    expect(reminders.items, hasLength(1));
+    expect(reminders.items.first.at, isNotNull,
+        reason: 'time should parse (tomorrow 10am)');
+
+    r = await turn('what reminders do I have?');
+    expect(r.footer, contains('⏰'));
+    expect(r.answer.toLowerCase(), contains('insurance'));
+
     // ignore: avoid_print
-    print('ALL $n TURNS OK · ${store.facts.length} facts in store');
+    print('ALL $n TURNS OK · ${store.facts.length} facts in store · '
+        '${reminders.items.length} reminder(s)');
   });
 }
