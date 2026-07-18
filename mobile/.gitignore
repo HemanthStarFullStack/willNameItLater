@@ -46,3 +46,4 @@ app.*.map.json
 
 # Harness model files (multi-GB GGUFs) — fetched via test/harness/fetch_models.dart
 test/harness/models/
+android/app/src/main/jniLibs/

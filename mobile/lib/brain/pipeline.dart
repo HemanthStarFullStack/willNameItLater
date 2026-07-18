@@ -270,7 +270,11 @@ class Pipeline {
       for (final f in clean)
         if (_coverage(f, message) >= 0.6) f,
     ];
-    if (clean.isNotEmpty && ok.isEmpty) {
+    // Also never DROP a correction: if the extractor returned nothing for an
+    // update-cued statement ("my manager is NOW Raj" — greedy decode can flip
+    // between runs), an old, now-wrong fact would silently survive. Saving the
+    // raw message is always safer than keeping stale truth.
+    if (ok.isEmpty && (clean.isNotEmpty || _updateCue.hasMatch(message))) {
       var msg = message.trim();
       while (msg.endsWith('.')) {
         msg = msg.substring(0, msg.length - 1);
@@ -302,8 +306,11 @@ class Pipeline {
       try {
         merged = (await llm.chat(
           'OLD: "${old.text}"\nNEW: "$fact"\n\n'
-          'Write ONE short note: OLD updated by NEW, keeping anything '
-          'from OLD that NEW does not contradict. Output only the note.',
+          'NEW is the current truth and overrides OLD where they disagree. '
+          'Write ONE short note stating only the CURRENT state: keep details '
+          'from OLD that NEW does not contradict, drop what it contradicts, '
+          'and never mention the change itself (no "now", "instead", '
+          '"changed"). Output only the note.',
         ))
             .trim();
       } catch (_) {
@@ -311,7 +318,11 @@ class Pipeline {
       }
       merged = merged.replaceAll(RegExp(r'^"|"$'), '');
       final covered = _coverage(merged, '${old.text} $fact');
-      await store.update(old.id, covered >= 0.6 ? merged : fact);
+      // The merged note must actually carry the NEW information — a small
+      // model sometimes rewrites OLD and drops the correction entirely
+      // (kept "Priya" after "my manager is now Raj").
+      final keepsNew = _coverage(fact, merged) >= 0.6;
+      await store.update(old.id, covered >= 0.6 && keepsNew ? merged : fact);
       return '${old.category} · updated';
     }
 
@@ -443,7 +454,10 @@ class Pipeline {
   bool _isLookup(String message) =>
       _lookup.hasMatch(message.trim()) && !_advice.hasMatch(message);
 
-  bool _needsWeb(String message) => _webHints.hasMatch(message);
+  // Personal fact statements share words with the live-info cues ("my manager
+  // is NOW Raj") — they must be remembered, never sent to the web.
+  bool _needsWeb(String message) =>
+      _webHints.hasMatch(message) && !_looksLikeFact(message);
 
   // --- answering -------------------------------------------------------------
 

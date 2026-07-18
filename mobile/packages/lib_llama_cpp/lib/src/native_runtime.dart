@@ -161,6 +161,12 @@ final class NativeLlamaRuntime {
       );
     }
 
+    // Vendored fix: each command is a fresh, fully-templated prompt, but the
+    // KV cache kept accumulating across commands (positions continue from the
+    // previous state) until llama_decode ran out of memory slots after ~a
+    // dozen turns. Clear the session before every prompt evaluation.
+    _bindings.llama_memory_clear(
+        _bindings.llama_get_memory(loaded.context), true);
     _decodeTokens(loaded.context, promptTokens);
     yield* _sampleFromEvaluatedPrompt(
       loaded: loaded,
@@ -219,6 +225,12 @@ final class NativeLlamaRuntime {
       stop: [...templateResult.additionalStops, ...command.stop],
     );
 
+    // Vendored fix: clear the KV cache before evaluating this command's
+    // prompt — see generate(). Without this a chat session hard-fails
+    // ("failed to find a memory slot") once accumulated turns fill the
+    // context, and generation attends to stale KV from earlier turns.
+    _bindings.llama_memory_clear(
+        _bindings.llama_get_memory(loaded.context), true);
     final initialTokenCount = _evaluateMessagePrompt(
       loaded: loaded,
       prompt: prompt,
